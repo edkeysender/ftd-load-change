@@ -1,0 +1,6 @@
+# Shell scripts run on the Raspberry Pi (Linux) — must stay LF, or the
+# kernel can't find the interpreter and you get "command not found".
+*.sh text eol=lf
+
+# PowerShell runs on Windows — keep CRLF.
+*.ps1 text eol=crlf
