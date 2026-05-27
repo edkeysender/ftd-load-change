@@ -96,7 +96,7 @@ After=network.target
 Type=simple
 User=ftd
 WorkingDirectory=/home/ftd/app
-ExecStart=/home/ftd/app/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8080
+ExecStart=/home/ftd/app/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8089
 Restart=on-failure
 
 [Install]
@@ -113,11 +113,11 @@ IP=$(hostname -I | awk '{print $1}')
 echo ""
 echo "=== Setup complete! ==="
 echo ""
-echo "Web UI:  http://${IP}:8080"
-echo "API:     http://${IP}:8080/api/state"
+echo "Web UI:  http://${IP}:8089"
+echo "API:     http://${IP}:8089/api/state"
 echo ""
 echo "Test from another machine:"
-echo "  curl http://${IP}:8080/api/state"
+echo "  curl http://${IP}:8089/api/state"
 echo ""
 echo "Service status:"
 systemctl status ftd-mode.service --no-pager | head -5

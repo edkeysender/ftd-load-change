@@ -29,7 +29,7 @@ SSH into your RPi and run:
 curl -fsSL https://raw.githubusercontent.com/edkeysender/ftd-load-change/main/install.sh | sudo bash
 ```
 
-When it finishes, it prints the web UI URL (something like `http://192.168.x.x:8080`).
+When it finishes, it prints the web UI URL (something like `http://192.168.x.x:8089`).
 
 ## 4. Verify
 
@@ -37,7 +37,7 @@ In a browser: open the printed URL. You should see the mode switcher with "TRAIN
 
 From any LAN machine:
 ```bash
-curl http://<rpi-ip>:8080/api/state
+curl http://<rpi-ip>:8089/api/state
 # Expected: {"current_mode":"training"}
 ```
 

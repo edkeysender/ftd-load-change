@@ -9,7 +9,7 @@ mirrors the branch contents to `D:\ftd\products\Load_testing` within ~15 seconds
 ```
   Raspberry Pi                              Windows client(s)
   ┌────────────────────┐                    ┌──────────────────────────┐
-  │ FastAPI :8080      │◄─── poll /15s ─────│ sync-agent.ps1 (boot task)│
+  │ FastAPI :8089      │◄─── poll /15s ─────│ sync-agent.ps1 (boot task)│
   │ git bare repo      │◄─── git pull ──────│ C:\git\ftd → mirror →    │
   │  training          │                    │ D:\ftd\products\         │
   │  development       │                    │   Load_testing           │
@@ -84,7 +84,7 @@ ssh ftd@<rpi-ip> "echo ok"
 
 ## Verify
 
-1. Open `http://<rpi-ip>:8080` in a browser.
+1. Open `http://<rpi-ip>:8089` in a browser.
 2. On Windows: `Get-Content C:\git\ftd-sync.log -Wait -Tail 20`
 3. Click "Switch to DEVELOPMENT" in the web UI.
 4. Within 15s, the Windows log shows the deploy and `D:\ftd\products\Load_testing`
@@ -126,7 +126,7 @@ windows/
 **Service status**: `sudo systemctl status ftd-mode.service`
 **Live logs**: `sudo journalctl -u ftd-mode.service -f`
 **Windows agent log**: `C:\git\ftd-sync.log`
-**Test API**: `curl http://<rpi-ip>:8080/api/state`
+**Test API**: `curl http://<rpi-ip>:8089/api/state`
 
 ## Uninstall
 

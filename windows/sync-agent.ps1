@@ -29,7 +29,7 @@ function Write-Log {
 
 function Get-RemoteMode {
     try {
-        $resp = Invoke-RestMethod -Uri "http://${RpiHost}:8080/api/state" -TimeoutSec 5
+        $resp = Invoke-RestMethod -Uri "http://${RpiHost}:8089/api/state" -TimeoutSec 5
         return $resp.current_mode
     } catch {
         Write-Log "Failed to reach RPi: $($_.Exception.Message)" "WARN"
