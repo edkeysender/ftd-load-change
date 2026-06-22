@@ -1,19 +1,27 @@
 # FTD Mode Switcher
 
-Web UI on a Raspberry Pi that flips all Windows clients between `training` and
-`development` mode. Each mode is a git branch; on switch, every Windows client
-mirrors the branch contents to `D:\ftd\products\Load_testing` within ~15 seconds.
+Web UI on a Raspberry Pi that controls the `D:\ftd\products\Load_testing`
+content on every Windows client. Two axes of control:
+
+- **mode**     — `training` or `development` (a git branch)
+- **versions** — per mode, which version of each software component is active
+
+On any change, every Windows client assembles the selected component versions
+and mirrors them into `D:\ftd\products\Load_testing` within ~15 seconds.
 
 ## Architecture
 
 ```
   Raspberry Pi                              Windows client(s)
-  ┌────────────────────┐                    ┌──────────────────────────┐
-  │ FastAPI :8089      │◄─── poll /15s ─────│ sync-agent.ps1 (boot task)│
-  │ git bare repo      │◄─── git pull ──────│ C:\git\ftd → mirror →    │
-  │  training          │                    │ D:\ftd\products\         │
-  │  development       │                    │   Load_testing           │
-  └────────────────────┘                    └──────────────────────────┘
+  ┌──────────────────────────┐              ┌────────────────────────────────┐
+  │ FastAPI :8089            │◄ poll /15s ──│ sync-agent.ps1 (boot task)     │
+  │  state.json:             │              │  read mode + selected versions │
+  │   current_mode           │◄ git pull ───│  checkout branch               │
+  │   selections per mode    │              │  stage <comp>/<ver>/* files    │
+  │ git bare repo            │              │  robocopy /MIR stage →         │
+  │  training, development   │              │  D:\ftd\products\Load_testing  │
+  │  with <component>/<ver>  │              │                                │
+  └──────────────────────────┘              └────────────────────────────────┘
 ```
 
 ## One-line install on the Raspberry Pi
@@ -86,27 +94,49 @@ ssh ftd@<rpi-ip> "echo ok"
 
 1. Open `http://<rpi-ip>:8089` in a browser.
 2. On Windows: `Get-Content C:\git\ftd-sync.log -Wait -Tail 20`
-3. Click "Switch to DEVELOPMENT" in the web UI.
+3. Switch mode or change a version selection in the UI.
 4. Within 15s, the Windows log shows the deploy and `D:\ftd\products\Load_testing`
-   contains `MODE_DEVELOPMENT.txt` instead of `MODE_TRAINING.txt`.
+   reflects the union of the selected versions.
+
+Quick API checks:
+```bash
+curl http://<rpi-ip>:8089/api/state         # active mode + resolved versions
+curl http://<rpi-ip>:8089/api/components    # available components/versions per branch
+```
 
 ## Populating real content
+
+Layout convention per branch: a top-level folder is a **component**; each
+subfolder is a **version** of that component. Loose files at branch root are
+ignored by the deploy.
+
+```
+powerSwitchUI/
+  1.0.0/        # files that ARE the load for this component+version
+  2.0.0/
+otherTool/      # add more components the same way
+  0.9.0/
+```
+
+Push as many versions as you like — they don't deploy unless you select them
+in the UI. Multiple components are deployed as a **union** (all selected
+versions, flattened together into `Load_testing`).
 
 ```bash
 git clone ftd@<rpi-ip>:/home/ftd/repos/ftd.git ftd-content
 cd ftd-content
-git checkout training
-rm MODE_TRAINING.txt
-# ... add real files ...
-git add . && git commit -m "Real training content" && git push
 
 git checkout development
-rm MODE_DEVELOPMENT.txt
-# ... add real files ...
-git add . && git commit -m "Real development content" && git push
+mkdir -p powerSwitchUI/2.0.0
+cp -r /path/to/powerSwitchUI-2.0.0/* powerSwitchUI/2.0.0/
+git add -A && git commit -m "powerSwitchUI 2.0.0" && git push
+
+git checkout training
+# stable versions for training go here, same layout
 ```
 
-After pushing, the next mode switch triggers a deploy of the new content.
+Then in the web UI, pick the active version per component for each mode. The
+selection is saved to `state.json`; clients pick it up on their next poll.
 
 ## Repo layout
 

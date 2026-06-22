@@ -1,18 +1,21 @@
 # FTD Mode Switcher - Windows Sync Agent
-# Polls the RPi for the current mode and deploys files to D:\ftd\products\Load_testing
-# when the mode changes.
+#
+# Polls the RPi for the active mode and the selected version of each software
+# component, assembles those versions into a staging dir, and mirrors the result
+# into D:\ftd\products\Load_testing.
 #
 # Run manually:    powershell.exe -ExecutionPolicy Bypass -File sync-agent.ps1
 # Install as task: powershell.exe -ExecutionPolicy Bypass -File install-task.ps1
 
 param(
-    [string]$RpiHost      = "RPI_HOSTNAME_OR_IP",   # <-- EDIT THIS
-    [string]$RepoUrl      = "ftd@RPI_HOSTNAME_OR_IP:/home/ftd/repos/ftd.git",  # <-- EDIT THIS
-    [string]$RepoPath     = "C:\git\ftd",
-    [string]$TargetPath   = "D:\ftd\products\Load_testing",
-    [string]$LastModeFile = "C:\git\last_mode.txt",
-    [string]$LogFile      = "C:\git\ftd-sync.log",
-    [int]$PollInterval    = 15
+    [string]$RpiHost         = "RPI_HOSTNAME_OR_IP",   # <-- EDIT THIS
+    [string]$RepoUrl         = "ftd@RPI_HOSTNAME_OR_IP:/home/ftd/repos/ftd.git",  # <-- EDIT THIS
+    [string]$RepoPath        = "C:\git\ftd",
+    [string]$StagePath       = "C:\git\ftd-stage",
+    [string]$TargetPath      = "D:\ftd\products\Load_testing",
+    [string]$StateCacheFile  = "C:\git\last_deploy.txt",
+    [string]$LogFile         = "C:\git\ftd-sync.log",
+    [int]$PollInterval       = 15
 )
 
 # Ensure parent dirs exist
@@ -27,27 +30,39 @@ function Write-Log {
     Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
 }
 
-function Get-RemoteMode {
+function Get-RemoteState {
     try {
-        $resp = Invoke-RestMethod -Uri "http://${RpiHost}:8089/api/state" -TimeoutSec 5
-        return $resp.current_mode
+        return Invoke-RestMethod -Uri "http://${RpiHost}:8089/api/state" -TimeoutSec 5
     } catch {
         Write-Log "Failed to reach RPi: $($_.Exception.Message)" "WARN"
         return $null
     }
 }
 
-function Get-LastMode {
-    if (Test-Path $LastModeFile) {
-        return (Get-Content $LastModeFile -Raw).Trim()
+function Get-StateSignature {
+    param($State)
+    if (-not $State) { return "" }
+    $mode = [string]$State.current_mode
+    $pairs = @()
+    if ($State.versions) {
+        foreach ($p in ($State.versions.PSObject.Properties | Sort-Object Name)) {
+            $pairs += "$($p.Name)=$($p.Value)"
+        }
+    }
+    return "$mode|" + ($pairs -join ";")
+}
+
+function Get-CachedSignature {
+    if (Test-Path $StateCacheFile) {
+        return (Get-Content $StateCacheFile -Raw).Trim()
     }
     return ""
 }
 
-function Set-LastMode {
-    param([string]$Mode)
-    $null = New-Item -ItemType Directory -Force -Path (Split-Path $LastModeFile -Parent)
-    Set-Content -Path $LastModeFile -Value $Mode
+function Set-CachedSignature {
+    param([string]$Sig)
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path $StateCacheFile -Parent)
+    Set-Content -Path $StateCacheFile -Value $Sig
 }
 
 function Initialize-Repo {
@@ -62,77 +77,99 @@ function Initialize-Repo {
     return $true
 }
 
-function Deploy-Mode {
-    param([string]$Mode)
+function Deploy-State {
+    param($State)
 
-    Write-Log "===== Deploying mode: $Mode ====="
+    $mode = [string]$State.current_mode
+    Write-Log "===== Deploying mode '$mode' ====="
 
     if (-not (Initialize-Repo)) { return $false }
 
     Push-Location $RepoPath
     try {
-        # Force-sync the working repo to remote branch
         Write-Log "Fetching..."
         git fetch origin 2>&1 | ForEach-Object { Write-Log $_ }
 
-        Write-Log "Checking out $Mode..."
-        git checkout $Mode 2>&1 | ForEach-Object { Write-Log $_ }
-        git reset --hard "origin/$Mode" 2>&1 | ForEach-Object { Write-Log $_ }
+        Write-Log "Checking out $mode..."
+        git checkout $mode 2>&1 | ForEach-Object { Write-Log $_ }
+        git reset --hard "origin/$mode" 2>&1 | ForEach-Object { Write-Log $_ }
         git clean -fdx 2>&1 | ForEach-Object { Write-Log $_ }
 
-        # Ensure target exists
+        # Rebuild a clean staging dir holding the union of selected versions.
+        if (Test-Path $StagePath) { Remove-Item $StagePath -Recurse -Force }
+        $null = New-Item -ItemType Directory -Force -Path $StagePath
+
+        $deployed = 0
+        $missing  = @()
+        if ($State.versions) {
+            foreach ($p in $State.versions.PSObject.Properties) {
+                $component = $p.Name
+                $version   = [string]$p.Value
+                $src = Join-Path (Join-Path $RepoPath $component) $version
+                if (Test-Path $src) {
+                    Write-Log "Staging $component $version  ($src)"
+                    Copy-Item -Path (Join-Path $src '*') -Destination $StagePath -Recurse -Force
+                    $deployed++
+                } else {
+                    Write-Log "Selected $component $version not found at $src" "WARN"
+                    $missing += "$component=$version"
+                }
+            }
+        }
+
+        if ($deployed -eq 0) {
+            $why = if ($missing.Count -gt 0) { "all selections missing: " + ($missing -join ", ") }
+                   else { "no versions selected" }
+            Write-Log "Skipping mirror to avoid wiping $TargetPath ($why)." "ERROR"
+            return $false
+        }
+
         $null = New-Item -ItemType Directory -Force -Path $TargetPath
-
-        # Mirror to target: /MIR makes target an exact 1:1 copy
-        # /XD .git excludes the .git folder
-        Write-Log "Mirroring to $TargetPath..."
-        $robo = robocopy $RepoPath $TargetPath /MIR /XD .git /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
+        Write-Log "Mirroring $deployed component(s) -> $TargetPath..."
+        $null = robocopy $StagePath $TargetPath /MIR /R:2 /W:2 /NFL /NDL /NJH /NJS /NP
         $exit = $LASTEXITCODE
-
         if ($exit -ge 8) {
             Write-Log "Robocopy failed with exit code $exit" "ERROR"
             return $false
         }
 
-        Write-Log "Deploy complete (robocopy exit: $exit)"
-        Set-LastMode $Mode
+        Write-Log "Deploy complete (robocopy exit: $exit)."
         return $true
     } finally {
         Pop-Location
     }
 }
 
-# ============ Main loop ============
+# =============================== Main loop ===============================
 Write-Log "FTD Sync Agent starting. RPi=$RpiHost, Poll=${PollInterval}s, Target=$TargetPath"
 
-# Initial deploy on startup if we have a cached mode (handles boot case)
-$lastMode = Get-LastMode
-$bootMode = Get-RemoteMode
+$cachedSig = Get-CachedSignature
+$state     = Get-RemoteState
 
-if ($bootMode) {
-    # RPi reachable: deploy current remote mode if it differs from last
-    if ($bootMode -ne $lastMode) {
-        Write-Log "Boot: remote mode '$bootMode' differs from cached '$lastMode'. Deploying."
-        Deploy-Mode $bootMode | Out-Null
+if ($state) {
+    $sig = Get-StateSignature $state
+    if ($sig -ne $cachedSig) {
+        Write-Log "Boot: state '$sig' differs from cached '$cachedSig'. Deploying."
+        if (Deploy-State $state) { Set-CachedSignature $sig }
     } else {
-        Write-Log "Boot: mode '$bootMode' matches cache. No deploy needed."
+        Write-Log "Boot: state '$sig' matches cache. No deploy needed."
     }
-} elseif ($lastMode) {
-    Write-Log "Boot: RPi unreachable. Last known mode was '$lastMode'. Skipping deploy (files already in place)." "WARN"
+} elseif ($cachedSig) {
+    Write-Log "Boot: RPi unreachable. Keeping last deploy ('$cachedSig')." "WARN"
 } else {
-    Write-Log "Boot: RPi unreachable and no cached mode. Waiting for RPi..." "WARN"
+    Write-Log "Boot: RPi unreachable and no cache. Waiting for RPi..." "WARN"
 }
 
-# Poll loop
 while ($true) {
     Start-Sleep -Seconds $PollInterval
 
-    $remoteMode = Get-RemoteMode
-    if (-not $remoteMode) { continue }  # Skip if RPi unreachable
+    $state = Get-RemoteState
+    if (-not $state) { continue }
 
-    $currentMode = Get-LastMode
-    if ($remoteMode -ne $currentMode) {
-        Write-Log "Mode change detected: '$currentMode' -> '$remoteMode'"
-        Deploy-Mode $remoteMode | Out-Null
+    $sig    = Get-StateSignature $state
+    $cached = Get-CachedSignature
+    if ($sig -ne $cached) {
+        Write-Log "Change detected: '$cached' -> '$sig'"
+        if (Deploy-State $state) { Set-CachedSignature $sig }
     }
 }
