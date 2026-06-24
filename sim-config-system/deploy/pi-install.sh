@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/edkeysender/ftd-load-change/main/sim-config-system/deploy/pi-install.sh | sudo bash
 #
 # Clones/updates the repo into /opt/ftd-load-change, then runs pi-setup.sh which
-# installs the coordinator as the 'sim-coordinator' systemd service (port 8080,
+# installs the coordinator as the 'sim-coordinator' systemd service (port 8090,
 # local-init mode — no Forgejo required to start). Idempotent; safe to re-run.
 set -e
 

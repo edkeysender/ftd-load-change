@@ -17,7 +17,7 @@ if [ -f "$ENV_FILE" ]; then
 fi
 : "${SIM_AGENT_TOKEN:?Set SIM_AGENT_TOKEN or run pi-setup.sh first}"
 : "${SIM_WORK_CLONE:?SIM_WORK_CLONE not set (check $ENV_FILE)}"
-export SIM_BASE="${SIM_BASE:-http://localhost:${SIM_PORT:-8080}}"
+export SIM_BASE="${SIM_BASE:-http://localhost:${SIM_PORT:-8090}}"
 
 echo "=== Phase-1 smoke test ==="
 echo "Base:  $SIM_BASE"

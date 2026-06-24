@@ -1,4 +1,4 @@
-"""Coordinator API. Run: uvicorn coordinator.main:app --host 0.0.0.0 --port 8080
+"""Coordinator API. Run: uvicorn coordinator.main:app --host 0.0.0.0 --port 8090
 
 The coordinator is the single git writer and the orchestration brain. Agents are
 read-only git clients that poll /agents/{ip}/commands and post results.

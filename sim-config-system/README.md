@@ -34,7 +34,7 @@ agent/                  # Go Windows service: poll loop + state machine (each PC
    export SIM_DB=/srv/sim-config/coordinator.db
    export SIM_GIT_REMOTE=http://localhost:3000/sim/sim-config.git   # default; harmless if Forgejo is down
    export SIM_AGENT_TOKEN=<shared-token>
-   uvicorn coordinator.main:app --host 0.0.0.0 --port 8080
+   uvicorn coordinator.main:app --host 0.0.0.0 --port 8090
    ```
 3. **Agent** (each PC): copy `agent.example.yaml` → `agent.yaml`, fill it in, then
    `GOOS=windows go build -o simagent.exe ./agent` and install as a Windows service.

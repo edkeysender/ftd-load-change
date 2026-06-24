@@ -9,7 +9,7 @@
 # Usage (standalone):   sudo bash deploy/pi-setup.sh
 # Or via the repo:      sudo bash /opt/ftd-load-change/sim-config-system/deploy/pi-setup.sh
 #
-# Runs on a separate port (8080) from the old mode-switcher (8089), so both can
+# Runs on a separate port (8090) from the old mode-switcher (8089), so both can
 # coexist while you trust the new path.
 set -e
 
@@ -22,7 +22,7 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 REPO_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 
-PORT="${SIM_PORT:-8080}"
+PORT="${SIM_PORT:-8090}"
 DATA_DIR="${SIM_DATA_DIR:-/var/lib/sim-config}"      # SSD recommended for real use
 ENV_FILE=/etc/sim-config.env
 SERVICE=/etc/systemd/system/sim-coordinator.service
@@ -50,6 +50,7 @@ if [ ! -f "$ENV_FILE" ]; then
     TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)
     cat > "$ENV_FILE" <<EOF
 # Coordinator environment. Edit and 'systemctl restart sim-coordinator' to apply.
+SIM_PORT=$PORT
 SIM_WORK_CLONE=$DATA_DIR/work
 SIM_DB=$DATA_DIR/coordinator.db
 # LOCAL-INIT mode: empty remote => coordinator does 'git init' (no Forgejo needed).
