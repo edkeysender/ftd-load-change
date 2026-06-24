@@ -112,9 +112,10 @@ def lock_holder():
 
 # --- versions -----------------------------------------------------------
 def record_version(tag, message, author, commit_sha):
+    # OR IGNORE: re-sealing/idempotent calls must not collide on the tag PK.
     with conn() as c:
         c.execute(
-            "INSERT INTO versions (tag, message, author, commit_sha, created_at) VALUES (?,?,?,?,?)",
+            "INSERT OR IGNORE INTO versions (tag, message, author, commit_sha, created_at) VALUES (?,?,?,?,?)",
             (tag, message, author, commit_sha, time.time()),
         )
 

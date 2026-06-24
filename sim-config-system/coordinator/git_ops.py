@@ -93,8 +93,18 @@ def commit_all(message: str, author: str):
     return head_sha()
 
 
+def _ref_exists(ref: str) -> bool:
+    return _git("rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
+
+
 def seal_baseline(message: str, author: str):
-    """First-run: commit everything on master, tag v1.0, branch dev, set training-live."""
+    """First-run: commit everything on master, tag v1.0, branch dev, set training-live.
+
+    Idempotent: if v1.0 already exists this returns its commit and changes nothing.
+    Versions are immutable — once sealed, use dev -> capture -> promote to make new
+    versions, not a re-seal."""
+    if _ref_exists("refs/tags/v1.0"):
+        return head_sha("v1.0^{commit}")
     sha = commit_all(message, author)
     _git(*_ident(author), "tag", "-a", "v1.0", "-m", message)
     _git("branch", "-f", config.DEV_BRANCH, config.MASTER)
