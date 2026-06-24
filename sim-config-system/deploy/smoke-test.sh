@@ -24,6 +24,20 @@ echo "Base:  $SIM_BASE"
 echo "Clone: $SIM_WORK_CLONE"
 echo ""
 
+# Wait for the coordinator to be listening (it may have just restarted, and its
+# startup runs git init before binding the port).
+printf "Waiting for coordinator"
+ready=
+for _ in $(seq 1 40); do
+    if curl -fsS "$SIM_BASE/pcs" >/dev/null 2>&1; then ready=1; break; fi
+    printf "."; sleep 0.5
+done
+echo ""
+if [ -z "$ready" ]; then
+    echo "FAIL: coordinator not responding at $SIM_BASE (check 'systemctl status sim-coordinator')"
+    exit 1
+fi
+
 python3 - <<'PY'
 import base64, json, os, urllib.request
 
