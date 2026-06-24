@@ -1,0 +1,14 @@
+# Forgejo on the Raspberry Pi. Put data on an external SSD, not the SD card.
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:7
+    container_name: forgejo
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - /mnt/ssd/forgejo:/data        # external SSD mount
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000

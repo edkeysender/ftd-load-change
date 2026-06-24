@@ -1,0 +1,8 @@
+# Copy to agent.yaml on each PC and fill in. One per machine.
+pc_ip: "70.84.68.12"
+folder: "pc-12-display"
+coordinator_url: "https://70.84.68.2:8080"   # the Raspberry Pi
+token: "change-me"                            # must match coordinator SIM_AGENT_TOKEN
+repo_path: "D:/sim-config"                    # local sparse clone
+git_remote: "http://70.84.68.2:3000/sim/sim-config.git"
+git_exe: "C:/sim-agent/git/cmd/git.exe"       # bundled portable git

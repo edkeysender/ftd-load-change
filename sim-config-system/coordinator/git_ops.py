@@ -1,0 +1,141 @@
+"""Thin wrapper around git on the coordinator's working clone.
+This module is the ONLY place that commits, merges, tags, and pushes."""
+import shutil
+import subprocess
+from pathlib import Path
+from . import config
+
+
+def _git(*args, check=True):
+    return subprocess.run(
+        ["git", "-C", str(config.WORK_CLONE), *args],
+        capture_output=True, text=True, check=check,
+    )
+
+
+def head_sha(ref="HEAD"):
+    return _git("rev-parse", ref).stdout.strip()
+
+
+def _has_remote() -> bool:
+    return bool(_git("remote", check=False).stdout.strip())
+
+
+def _push(*refs):
+    """Best-effort push: a no-op when no remote is configured (e.g. local
+    bootstrap before Forgejo is wired). Never fails the calling operation."""
+    if not _has_remote():
+        return
+    _git("push", "origin", *refs, check=False)
+
+
+def ensure_repo():
+    """Make the working clone usable. If GIT_REMOTE is configured and reachable,
+    clone it; otherwise initialise a local repo on `master` so bootstrap works
+    before Forgejo exists. Idempotent."""
+    if (config.WORK_CLONE / ".git").exists():
+        if _has_remote():
+            _git("fetch", "--all", check=False)
+        _seed_root_files()
+        return
+    config.WORK_CLONE.parent.mkdir(parents=True, exist_ok=True)
+    cloned = False
+    if config.GIT_REMOTE:
+        r = subprocess.run(["git", "clone", config.GIT_REMOTE, str(config.WORK_CLONE)],
+                           capture_output=True, text=True)
+        cloned = r.returncode == 0
+    if not cloned:
+        config.WORK_CLONE.mkdir(parents=True, exist_ok=True)
+        _git("init")
+        # Unborn HEAD -> master, so the first commit lands on master (spec ref).
+        _git("symbolic-ref", "HEAD", f"refs/heads/{config.MASTER}")
+    # Fallback committer identity so annotated tags / commits never hard-fail on a
+    # Pi without a global git identity. Per-op -c flags still override for attribution.
+    _git("config", "user.name", "sim-coordinator", check=False)
+    _git("config", "user.email", "coordinator@sim.local", check=False)
+    _seed_root_files()
+
+
+def _ident(author: str):
+    """-c flags that attribute a commit/tag to the acting user."""
+    return ("-c", f"user.name={author}", "-c", f"user.email={author}@sim.local")
+
+
+def _seed_root_files():
+    """Ensure manifest.yaml + .gitignore exist at the clone root so v1.0 is
+    self-describing. Copied from the bundled seed if absent (local bootstrap)."""
+    dst_manifest = config.WORK_CLONE / "manifest.yaml"
+    if not dst_manifest.exists() and config.SEED_MANIFEST and config.SEED_MANIFEST.exists():
+        shutil.copyfile(config.SEED_MANIFEST, dst_manifest)
+    dst_ignore = config.WORK_CLONE / ".gitignore"
+    if not dst_ignore.exists() and config.SEED_GITIGNORE and config.SEED_GITIGNORE.exists():
+        shutil.copyfile(config.SEED_GITIGNORE, dst_ignore)
+
+
+def stage_import_bundle(folder: str, files: dict):
+    """Stage an imported PC tree into the working clone. File keys are repo paths
+    already prefixed with <folder> (e.g. "pc-12-display/displays/CPTInboard/x").
+    Idempotent: the PC folder is cleared first, so re-import replaces it."""
+    target_folder = config.WORK_CLONE / folder
+    if target_folder.exists():
+        shutil.rmtree(target_folder)
+    for rel_path, content in files.items():
+        dst = config.WORK_CLONE / rel_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(content)
+
+
+def commit_all(message: str, author: str):
+    _git("add", "-A")
+    if not _git("status", "--porcelain").stdout.strip():
+        return None  # nothing changed
+    _git(*_ident(author), "commit", "-m", message)
+    return head_sha()
+
+
+def seal_baseline(message: str, author: str):
+    """First-run: commit everything on master, tag v1.0, branch dev, set training-live."""
+    sha = commit_all(message, author)
+    _git(*_ident(author), "tag", "-a", "v1.0", "-m", message)
+    _git("branch", "-f", config.DEV_BRANCH, config.MASTER)
+    _git("branch", "-f", config.TRAINING_LIVE, "v1.0")
+    _push(config.MASTER, config.DEV_BRANCH, config.TRAINING_LIVE, "v1.0")
+    return sha
+
+
+def apply_capture_bundle(folder: str, files: dict, message: str, author: str):
+    """Write captured files into <folder> on the dev branch and commit (serialized by caller)."""
+    _git("checkout", config.DEV_BRANCH)
+    base = config.WORK_CLONE / folder
+    for rel_path, content in files.items():
+        target = base / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    return commit_all(message, author)
+
+
+def promote(message: str, author: str, new_tag: str):
+    """Squash-merge dev into master, tag the new version, move training-live."""
+    _git("checkout", config.MASTER)
+    _git("merge", "--squash", config.DEV_BRANCH)
+    sha = commit_all(f"{new_tag}: {message}", author)
+    _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
+    _git("branch", "-f", config.TRAINING_LIVE, new_tag)
+    _push(config.MASTER, config.TRAINING_LIVE, new_tag)
+    return sha
+
+
+def rollback(tag: str):
+    """Point training-live at an older immutable tag (deploy happens separately)."""
+    _git("branch", "-f", config.TRAINING_LIVE, tag)
+    _push(config.TRAINING_LIVE)
+    return head_sha(config.TRAINING_LIVE)
+
+
+def changed_files(base: str, head: str):
+    out = _git("diff", "--name-status", f"{base}..{head}").stdout.strip()
+    return [line.split("\t", 1) for line in out.splitlines() if line]
+
+
+def compare_url(base: str, head: str):
+    return f"{config.FORGEJO_URL}/compare/{base}...{head}"

@@ -1,0 +1,11 @@
+*.log
+logs/
+Logs/
+cache/
+Cache/
+*.tmp
+*.lock
+crashes/
+CrashDumps/
+# Prepar3D: config only — never version the install or scenery
+**/Navdata/

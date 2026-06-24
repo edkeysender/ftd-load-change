@@ -1,0 +1,46 @@
+package main
+
+// AgentConfig is read from a local agent.yaml on each PC.
+type AgentConfig struct {
+	PCIP           string `yaml:"pc_ip"`           // this PC's IP, key into the manifest
+	Folder         string `yaml:"folder"`          // its monorepo folder, e.g. pc-12-display
+	CoordinatorURL string `yaml:"coordinator_url"` // e.g. https://70.84.68.2:8080
+	Token          string `yaml:"token"`           // shared bearer token (OPEN Q: mTLS)
+	RepoPath       string `yaml:"repo_path"`       // local sparse clone path, e.g. D:/sim-config
+	GitRemote      string `yaml:"git_remote"`      // Forgejo URL
+	GitExe         string `yaml:"git_exe"`         // bundled portable git.exe
+}
+
+// State is the agent's place in the lifecycle (see PROJECT_SPEC.md section 8).
+type State string
+
+const (
+	StateUnseeded    State = "UNSEEDED"
+	StateIdle        State = "IDLE"
+	StateDeploying   State = "DEPLOYING"
+	StateTraining    State = "TRAINING"
+	StateDevTracking State = "DEV_TRACKING"
+	StateCapturing   State = "CAPTURING"
+	StateError       State = "ERROR"
+)
+
+// Command is pulled from the coordinator.
+type Command struct {
+	Type   string             `json:"type"`   // import | size_report | deploy | track | capture
+	Ref    string             `json:"ref"`    // for deploy/track
+	Folder string             `json:"folder"` // for import/capture
+	Apps   map[string]AppSpec `json:"apps"`   // for import + size_report (resolved specs)
+}
+
+// AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the
+// local manifest (yaml) and from coordinator commands (json), so it carries both
+// tag sets. Exclude here is already merged with the manifest defaults by the
+// coordinator before being sent to the agent.
+type AppSpec struct {
+	Live            []string `yaml:"live"              json:"live"`
+	Repo            string   `yaml:"repo"              json:"repo"`
+	Run             string   `yaml:"run"               json:"run"`
+	StartDelay      int      `yaml:"start_delay"       json:"start_delay"`
+	RestartOnChange bool     `yaml:"restart_on_change" json:"restart_on_change"`
+	Exclude         []string `yaml:"exclude"           json:"exclude"`
+}

@@ -1,0 +1,172 @@
+# manifest.yaml
+# Source of truth for the sim config versioning system.
+# Derived from the existing launcher.json (per-IP run + dirsToSync).
+#
+# POLICY (see PROJECT_SPEC.md):
+#   - Version the WHOLE app folder (binaries + required files), minus junk (denylist).
+#   - Prepar3D is CONFIG ONLY; its install/scenery is NOT versioned (Clonezilla handles full recovery).
+#   - One whole-sim version. One folder per PC. Coordinator is the sole git writer.
+#
+# Field reference per app:
+#   live:              one or more directories the running app reads/writes (mirror target on deploy)
+#   repo:              path inside the monorepo where this app's tree is versioned
+#   run:               executable launched by the agent
+#   start_delay:       seconds to wait before launching (preserves launcher.json ordering)
+#   restart_on_change: restart the app when its versioned files change (mainly used in DEV_TRACKING)
+#   exclude:           glob denylist of junk never committed
+#
+# RECONCILE-AT-BOOTSTRAP (flagged, do not guess):
+#   - pc-12 displays RUN from D:/prosim/ProSim-training/ProSimDisplay/... but launcher.json
+#     syncs from D:/Rsync/ProSimDisplay-training/. Confirm the real read path on the live machine
+#     during import before sealing v1.0.
+
+defaults:
+  exclude:
+    - "**/*.log"
+    - "**/logs/**"
+    - "**/Logs/**"
+    - "**/cache/**"
+    - "**/Cache/**"
+    - "**/*.tmp"
+    - "**/*.lock"
+    - "**/crashes/**"
+    - "**/CrashDumps/**"
+
+pcs:
+  "70.84.68.11":
+    folder: pc-11-simhost
+    role: sim-host
+    apps:
+      immersive-display-pro:
+        live: []                       # no config versioned today; revisit in P2
+        repo: null
+        run: "D:/tools/ImmersiveDisplayPRO/ImmersiveDisplayPRO.exe"
+        start_delay: 1
+        restart_on_change: false
+
+      prepar3d:                        # CONFIG ONLY — install excluded, recovered via Clonezilla
+        live:
+          - "C:/ProgramData/Lockheed Martin"
+          - "C:/Users/sim/AppData/Roaming/Lockheed Martin"
+        repo: "pc-11-simhost/prepar3d"
+        run: "D:/Prepar3D/Lockheed Martin/Prepar3D v5/Prepar3D.exe"
+        start_delay: 10
+        restart_on_change: true
+        exclude:
+          - "**/Navdata/**"
+          - "**/*.log"
+          - "**/Cache/**"
+
+      prosim-a322:
+        live:
+          - "D:/prosim/ProSimA322-training"       # the load (staged)
+          - "C:/ProgramData/ProSim-AR"            # live config
+        repo: "pc-11-simhost/prosim-a322"
+        run: "D:/prosim/ProSimA322-training/ProSimA322-System.exe"
+        start_delay: 40
+        restart_on_change: true
+        exclude:
+          - "ProSim-AR/Navdata/**"
+          - "**/*.log"
+
+      prosim-hardware-gateway:
+        live: ["D:/ftd/product/a320ProsimHardwareGateway/a320ProsimHardwareGateway-training"]
+        repo: "pc-11-simhost/gateways/a320ProsimHardwareGateway"
+        run: "D:/ftd/product/a320ProsimHardwareGateway/a320ProsimHardwareGateway-training/vs1_64/bin/a320ProsimHardwareGateway"
+        start_delay: 55
+        restart_on_change: true
+
+      hardware-gateway:
+        live: ["D:/ftd/product/hardwareGateway/hardwareGateway-training"]
+        repo: "pc-11-simhost/gateways/hardwareGateway"
+        run: "D:/ftd/product/hardwareGateway/hardwareGateway-training/vs1_64/bin/hardwareGateway"
+        start_delay: 65
+        restart_on_change: true
+
+      control-loading-system:
+        live: ["D:/ftd/product/acl/acl-training"]
+        repo: "pc-11-simhost/acl"
+        run: "D:/ftd/product/acl/acl-training/vs1_64/bin/acl"
+        start_delay: 70
+        restart_on_change: true
+
+  "70.84.68.10":
+    folder: pc-10-ios
+    role: instructor-station
+    apps:
+      prosim-ios:
+        live:
+          - "D:/prosim/ProSimIOS"
+          - "C:/ProgramData/ProSim-AR"
+        repo: "pc-10-ios/prosim-ios"
+        run: "D:/prosim/ProSimIOS/ProsimIOS.exe"
+        start_delay: 15
+        restart_on_change: true
+        exclude:
+          - "ProSim-AR/Navdata/**"
+          - "**/*.log"
+
+  "70.84.68.12":
+    folder: pc-12-display
+    role: displays
+    apps:
+      display-cpt-inboard:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/CPTInboard"]
+        repo: "pc-12-display/displays/CPTInboard"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/CPTInboard/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-cpt-outboard:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/CPTOutboard"]
+        repo: "pc-12-display/displays/CPTOutboard"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/CPTOutboard/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-fo-inboard:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/FOInboard"]
+        repo: "pc-12-display/displays/FOInboard"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/FOInboard/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-fo-outboard:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/FOOutboard"]
+        repo: "pc-12-display/displays/FOOutboard"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/FOOutboard/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-eicas-upper:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/EicasUpper"]
+        repo: "pc-12-display/displays/EicasUpper"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/EicasUpper/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-eicas-lower:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/EicasLower"]
+        repo: "pc-12-display/displays/EicasLower"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/EicasLower/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      display-isis:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/ISIS"]
+        repo: "pc-12-display/displays/ISIS"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/ISIS/ProSimA322-Display.exe"
+        start_delay: 5
+        restart_on_change: true
+      cdu-cpt:
+        live: ["D:/prosim/ProSim-training/ProSimCDU/CPT"]
+        repo: "pc-12-display/cdu/CPT"
+        run: "D:/prosim/ProSim-training/ProSimCDU/CPT/ProSimA322-MCDU.exe"
+        start_delay: 5
+        restart_on_change: true
+      cdu-fo:
+        live: ["D:/prosim/ProSim-training/ProSimCDU/FO"]
+        repo: "pc-12-display/cdu/FO"
+        run: "D:/prosim/ProSim-training/ProSimCDU/FO/ProSimA322-MCDU.exe"
+        start_delay: 5
+        restart_on_change: true
+      prosim-audio2:
+        live: ["D:/prosim/ProSim-training/ProSimDisplay/ProSimAudio2"]
+        repo: "pc-12-display/audio/ProSimAudio2"
+        run: "D:/prosim/ProSim-training/ProSimDisplay/ProSimAudio2/ProSimAudio.v2.exe"
+        start_delay: 60
+        restart_on_change: true

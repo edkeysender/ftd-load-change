@@ -1,0 +1,176 @@
+"""SQLite state: agent registry, version history, dev-session lock, deploy log."""
+import json
+import sqlite3
+import time
+from contextlib import contextmanager
+from . import config
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS agents (
+    pc_ip        TEXT PRIMARY KEY,
+    folder       TEXT,
+    mode         TEXT,              -- UNSEEDED | IDLE | TRAINING | DEV_TRACKING | DEPLOYING | CAPTURING | ERROR
+    current_ref  TEXT,
+    clean        INTEGER,           -- 1 = matches its ref, 0 = drifted
+    last_seen    REAL
+);
+CREATE TABLE IF NOT EXISTS versions (
+    tag        TEXT PRIMARY KEY,    -- v1.0, v1.1, ...
+    message    TEXT,
+    author     TEXT,
+    commit_sha TEXT,
+    created_at REAL
+);
+CREATE TABLE IF NOT EXISTS dev_session (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    holder     TEXT,                -- user who owns the lock; NULL = no active session
+    started_at REAL
+);
+CREATE TABLE IF NOT EXISTS deploys (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ref        TEXT,
+    results    TEXT,                -- JSON: {pc_ip: "ok"|"fail:reason"}
+    created_at REAL
+);
+CREATE TABLE IF NOT EXISTS imports (
+    pc_ip       TEXT PRIMARY KEY,   -- last bootstrap import per PC
+    folder      TEXT,
+    file_count  INTEGER,
+    byte_count  INTEGER,
+    missing     TEXT,               -- JSON list of missing live dirs (flagged for review)
+    imported_at REAL
+);
+CREATE TABLE IF NOT EXISTS size_reports (
+    pc_ip       TEXT PRIMARY KEY,   -- last du -sh report per PC
+    folder      TEXT,
+    sizes       TEXT,               -- JSON: {app: bytes}
+    reported_at REAL
+);
+INSERT OR IGNORE INTO dev_session (id, holder, started_at) VALUES (1, NULL, NULL);
+"""
+
+
+@contextmanager
+def conn():
+    c = sqlite3.connect(config.DB_PATH)
+    c.row_factory = sqlite3.Row
+    try:
+        yield c
+        c.commit()
+    finally:
+        c.close()
+
+
+def init():
+    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with conn() as c:
+        c.executescript(SCHEMA)
+
+
+# --- agents -------------------------------------------------------------
+def upsert_agent(pc_ip, folder, mode, current_ref, clean):
+    with conn() as c:
+        c.execute(
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(pc_ip) DO UPDATE SET
+                 folder=excluded.folder, mode=excluded.mode,
+                 current_ref=excluded.current_ref, clean=excluded.clean,
+                 last_seen=excluded.last_seen""",
+            (pc_ip, folder, mode, current_ref, int(clean), time.time()),
+        )
+
+
+def list_agents():
+    now = time.time()
+    with conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM agents")]
+    for r in rows:
+        r["online"] = (now - (r["last_seen"] or 0)) < config.HEARTBEAT_TIMEOUT
+    return rows
+
+
+# --- dev-session lock ---------------------------------------------------
+def acquire_lock(user):
+    with conn() as c:
+        row = c.execute("SELECT holder FROM dev_session WHERE id=1").fetchone()
+        if row["holder"] and row["holder"] != user:
+            return False
+        c.execute("UPDATE dev_session SET holder=?, started_at=? WHERE id=1", (user, time.time()))
+        return True
+
+
+def release_lock():
+    with conn() as c:
+        c.execute("UPDATE dev_session SET holder=NULL, started_at=NULL WHERE id=1")
+
+
+def lock_holder():
+    with conn() as c:
+        return c.execute("SELECT holder FROM dev_session WHERE id=1").fetchone()["holder"]
+
+
+# --- versions -----------------------------------------------------------
+def record_version(tag, message, author, commit_sha):
+    with conn() as c:
+        c.execute(
+            "INSERT INTO versions (tag, message, author, commit_sha, created_at) VALUES (?,?,?,?,?)",
+            (tag, message, author, commit_sha, time.time()),
+        )
+
+
+def list_versions():
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM versions ORDER BY created_at DESC")]
+
+
+def next_version_tag():
+    """Compute v(N+1) as a simple minor bump from the latest vMAJOR.MINOR."""
+    vers = list_versions()
+    if not vers:
+        return "v1.0"
+    latest = vers[0]["tag"].lstrip("v")
+    major, minor = (latest.split(".") + ["0"])[:2]
+    return f"v{major}.{int(minor) + 1}"
+
+
+# --- bootstrap: imports + size reports ----------------------------------
+def record_import(pc_ip, folder, file_count, byte_count, missing):
+    with conn() as c:
+        c.execute(
+            """INSERT INTO imports (pc_ip, folder, file_count, byte_count, missing, imported_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(pc_ip) DO UPDATE SET
+                 folder=excluded.folder, file_count=excluded.file_count,
+                 byte_count=excluded.byte_count, missing=excluded.missing,
+                 imported_at=excluded.imported_at""",
+            (pc_ip, folder, file_count, byte_count, json.dumps(missing or []), time.time()),
+        )
+
+
+def list_imports():
+    with conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM imports")]
+    for r in rows:
+        r["missing"] = json.loads(r["missing"] or "[]")
+    return rows
+
+
+def record_size_report(pc_ip, folder, sizes):
+    with conn() as c:
+        c.execute(
+            """INSERT INTO size_reports (pc_ip, folder, sizes, reported_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(pc_ip) DO UPDATE SET
+                 folder=excluded.folder, sizes=excluded.sizes,
+                 reported_at=excluded.reported_at""",
+            (pc_ip, folder, json.dumps(sizes or {}), time.time()),
+        )
+
+
+def list_size_reports():
+    with conn() as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM size_reports")]
+    for r in rows:
+        r["sizes"] = json.loads(r["sizes"] or "{}")
+    return rows
