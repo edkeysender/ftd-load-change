@@ -121,6 +121,17 @@ func (c *Client) UploadImportBundle(pcIP, folder string, missing []string, files
 	return nil
 }
 
+// DeployResult reports the outcome of a deploy so the UI updates immediately
+// (the periodic heartbeat would otherwise carry it a few seconds later).
+func (c *Client) DeployResult(pcIP, folder, mode, ref string, clean bool) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/deploy-result", map[string]any{
+		"folder": folder, "mode": mode, "ref": ref, "clean": clean,
+	})
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // PostSizeReport posts per-app byte sizes for the bootstrap panel.
 func (c *Client) PostSizeReport(pcIP, folder string, sizes map[string]int64) error {
 	resp, err := c.do("POST", "/agents/"+pcIP+"/size-report-result", map[string]any{

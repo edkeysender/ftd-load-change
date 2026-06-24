@@ -77,37 +77,49 @@ func (a *Agent) doSizeReport(c Command) {
 	}
 }
 
-// doDeploy (Phase 2): fetch -> sparse checkout training-live -> mirror worktree->live -> restart.
+// doDeploy (Phase 2): fetch -> sparse checkout the ref -> mirror worktree->live
+// (honoring excludes) -> restart apps in start_delay order. Local edits to
+// versioned files are overwritten — the determinism guarantee.
 func (a *Agent) doDeploy(c Command) {
-	a.state = StateDeploying
-	log.Printf("[deploy] ref=%s", c.Ref)
-	if err := GitFetchCheckout(a.cfg, c.Ref); err != nil {
+	a.setState(StateDeploying)
+	log.Printf("[deploy] ref=%s folder=%s apps=%d", c.Ref, c.Folder, len(c.Apps))
+	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil {
 		a.fail(err)
 		return
 	}
-	if err := MirrorToLive(a.cfg); err != nil { // worktree -> live, honoring excludes
+	if err := MirrorToLive(a.cfg, c.Apps); err != nil { // worktree -> live, honoring excludes
 		a.fail(err)
 		return
 	}
-	RestartApps(a.cfg) // launch in start_delay order
-	a.state = StateTraining
+	RestartApps(c.Apps) // launch in start_delay order
+	a.remember(c, true) // store apps+ref; just-deployed => clean
+	a.setState(StateTraining)
+	a.api.DeployResult(a.cfg.PCIP, c.Folder, "TRAINING", c.Ref, true)
+	log.Printf("[deploy] done -> TRAINING @ %s", c.Ref)
 }
 
-// doTrack (Phase 3): switch to DEV_TRACKING on the dev branch.
+// doTrack (Phase 3 driver): same mirror as deploy but tracks the dev branch and
+// stays in DEV_TRACKING so testers see changes live.
 func (a *Agent) doTrack(c Command) {
-	log.Printf("[track] ref=%s", c.Ref)
-	if err := GitFetchCheckout(a.cfg, c.Ref); err != nil {
+	a.setState(StateDeploying)
+	log.Printf("[track] ref=%s folder=%s apps=%d", c.Ref, c.Folder, len(c.Apps))
+	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil {
 		a.fail(err)
 		return
 	}
-	MirrorToLive(a.cfg)
-	RestartApps(a.cfg)
-	a.state = StateDevTracking
+	if err := MirrorToLive(a.cfg, c.Apps); err != nil {
+		a.fail(err)
+		return
+	}
+	RestartApps(c.Apps)
+	a.remember(c, true)
+	a.setState(StateDevTracking)
+	log.Printf("[track] done -> DEV_TRACKING @ %s", c.Ref)
 }
 
 // doCapture (Phase 3): quiesce apps, mirror live->worktree, bundle changed files, upload.
 func (a *Agent) doCapture(c Command) {
-	a.state = StateCapturing
+	a.setState(StateCapturing)
 	log.Printf("[capture] folder=%s", c.Folder)
 	QuiesceApps(a.cfg) // graceful stop so files aren't mid-write (OPEN Q: force-kill fallback)
 	if err := MirrorToWorktree(a.cfg); err != nil { // live -> worktree, honoring excludes
@@ -124,30 +136,19 @@ func (a *Agent) doCapture(c Command) {
 		a.fail(err)
 		return
 	}
-	a.state = StateDevTracking
+	a.setState(StateDevTracking)
 }
 
 func (a *Agent) fail(err error) {
 	log.Printf("ERROR: %v", err)
-	a.state = StateError
+	a.setState(StateError)
 }
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
-// ============================ platform stubs ============================
-// These are the Windows-specific pieces to implement. Kept as stubs so the
-// poll loop and state machine compile and can be exercised end-to-end first.
-
-func GitFetchCheckout(cfg AgentConfig, ref string) error {
-	// TODO: cfg.GitExe fetch; sparse-checkout set cfg.Folder; checkout ref.
-	return nil
-}
-
-func MirrorToLive(cfg AgentConfig) error {
-	// TODO: robocopy-equivalent worktree(cfg.RepoPath/folder/app.repo) -> app.live,
-	// /MIR with exclude globs. P3D = config dirs only.
-	return nil
-}
+// ===================== Phase-3 platform stubs (capture) =================
+// GitFetchCheckout / MirrorToLive / RestartApps / CheckClean now live in
+// deploy.go (Phase 2). These remain stubs until Phase 3.
 
 func MirrorToWorktree(cfg AgentConfig) error {
 	// TODO: reverse mirror app.live -> worktree, honoring excludes.
@@ -159,16 +160,6 @@ func ChangedFilesVsDev(cfg AgentConfig) (map[string][]byte, error) {
 	return map[string][]byte{}, nil
 }
 
-func RestartApps(cfg AgentConfig) {
-	// TODO: launch each app via app.run after app.start_delay seconds, in order.
-	//       Honor restart_on_change with a file watcher in DEV_TRACKING.
-}
-
 func QuiesceApps(cfg AgentConfig) {
 	// TODO: graceful stop of apps whose files are about to be captured.
-}
-
-func CheckClean(cfg AgentConfig) bool {
-	// TODO: true if worktree matches training-live (no drift).
-	return true
 }

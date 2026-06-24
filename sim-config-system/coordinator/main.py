@@ -22,6 +22,19 @@ def _auth(token: str | None):
         raise HTTPException(401, "bad agent token")
 
 
+def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
+    """Build a deploy/track command for one PC. Carries the resolved apps (with
+    merged excludes) + folder so the agent can mirror worktree->live and restart
+    without needing the manifest locally."""
+    return {"type": ctype, "ref": ref,
+            "folder": manifest.pc_folder(ip),
+            "apps": manifest.resolved_apps(ip)}
+
+
+def _enqueue_deploy_all():
+    manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "deploy", config.TRAINING_LIVE))
+
+
 # ===================== UI / operator endpoints ==========================
 @app.get("/pcs")
 def pcs():
@@ -68,7 +81,7 @@ class SealReq(BaseModel):
 def seal_baseline(req: SealReq):
     sha = git_ops.seal_baseline(req.message, req.author)
     db.record_version("v1.0", req.message, req.author, sha or "")
-    manifest.enqueue_all(lambda ip: {"type": "deploy", "ref": config.TRAINING_LIVE})
+    _enqueue_deploy_all()
     return {"tag": "v1.0", "sha": sha}
 
 
@@ -80,7 +93,7 @@ class DeployReq(BaseModel):
 def deploy(req: DeployReq):
     if req.ref != config.TRAINING_LIVE:
         git_ops.rollback(req.ref)  # repoint training-live, then deploy it
-    manifest.enqueue_all(lambda ip: {"type": "deploy", "ref": config.TRAINING_LIVE})
+    _enqueue_deploy_all()
     return {"deploying": config.TRAINING_LIVE}
 
 
@@ -92,7 +105,7 @@ class DevStartReq(BaseModel):
 def dev_start(req: DevStartReq):
     if not db.acquire_lock(req.user):
         raise HTTPException(409, f"dev session held by {db.lock_holder()}")
-    manifest.enqueue_all(lambda ip: {"type": "track", "ref": config.DEV_BRANCH})
+    manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "track", config.DEV_BRANCH))
     return {"locked_by": req.user}
 
 
@@ -132,7 +145,7 @@ def promote(req: PromoteReq):
     tag = db.next_version_tag()
     sha = git_ops.promote(req.message, req.author, tag)
     db.record_version(tag, req.message, req.author, sha or "")
-    manifest.enqueue_all(lambda ip: {"type": "deploy", "ref": config.TRAINING_LIVE})
+    _enqueue_deploy_all()
     return {"tag": tag, "sha": sha}
 
 
@@ -143,7 +156,7 @@ class RollbackReq(BaseModel):
 @app.post("/rollback")
 def rollback(req: RollbackReq):
     git_ops.rollback(req.tag)
-    manifest.enqueue_all(lambda ip: {"type": "deploy", "ref": config.TRAINING_LIVE})
+    _enqueue_deploy_all()
     return {"training_live": req.tag}
 
 

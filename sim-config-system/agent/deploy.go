@@ -1,0 +1,239 @@
+package main
+
+// Phase 2 — deploy/enforce. Windows-specific operations: sparse git checkout of
+// the deployed ref, robocopy mirror of the repo worktree onto live locations
+// (honoring excludes so junk like Navdata is neither copied nor deleted), and
+// app restart in start_delay order. These shell out to git/robocopy/taskkill, so
+// they compile on any OS but only run meaningfully on Windows.
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+func gitExe(cfg AgentConfig) string {
+	if cfg.GitExe != "" {
+		return cfg.GitExe
+	}
+	return "git"
+}
+
+// gitCmd runs git inside the local clone (cfg.RepoPath).
+func gitCmd(cfg AgentConfig, args ...string) (string, error) {
+	full := append([]string{"-C", cfg.RepoPath}, args...)
+	out, err := exec.Command(gitExe(cfg), full...).CombinedOutput()
+	return string(out), err
+}
+
+// GitFetchCheckout ensures a sparse clone exists, fetches, and checks out `ref`
+// (a moving branch like training-live/dev, or an immutable tag). Only `folder`
+// is materialised (sparse cone), so each PC pulls only what it runs.
+func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
+	if _, err := os.Stat(filepath.Join(cfg.RepoPath, ".git")); err != nil {
+		if cfg.GitRemote == "" {
+			return fmt.Errorf("no git_remote configured in agent.json; cannot deploy")
+		}
+		if err := os.MkdirAll(filepath.Dir(cfg.RepoPath), 0o755); err != nil {
+			return err
+		}
+		out, err := exec.Command(gitExe(cfg), "clone", "--no-checkout", cfg.GitRemote, cfg.RepoPath).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("clone failed: %v: %s", err, out)
+		}
+		if out, err := gitCmd(cfg, "sparse-checkout", "init", "--cone"); err != nil {
+			return fmt.Errorf("sparse-checkout init: %v: %s", err, out)
+		}
+	}
+	if out, err := gitCmd(cfg, "sparse-checkout", "set", folder); err != nil {
+		return fmt.Errorf("sparse-checkout set: %v: %s", err, out)
+	}
+	if out, err := gitCmd(cfg, "fetch", "--prune", "--tags", "origin"); err != nil {
+		return fmt.Errorf("fetch: %v: %s", err, out)
+	}
+	// Branch (training-live/dev) -> reset local to remote tip; otherwise a tag/sha.
+	if _, err := gitCmd(cfg, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+ref); err == nil {
+		if out, err := gitCmd(cfg, "checkout", "-f", "-B", ref, "refs/remotes/origin/"+ref); err != nil {
+			return fmt.Errorf("checkout branch %s: %v: %s", ref, err, out)
+		}
+	} else {
+		if out, err := gitCmd(cfg, "checkout", "-f", ref); err != nil {
+			return fmt.Errorf("checkout ref %s: %v: %s", ref, err, out)
+		}
+	}
+	return nil
+}
+
+// robocopyExcludes maps our /-separated **-globs onto robocopy /XD (dir names)
+// and /XF (file specs). Approximate but matches the denylist intent: dir globs
+// like "**/Navdata/**" -> /XD Navdata; file globs like "**/*.log" -> /XF *.log.
+// Crucially, excluded dirs/files are neither copied NOR deleted by /MIR, so live
+// Navdata/logs survive a deploy.
+func robocopyExcludes(patterns []string) (xd, xf []string) {
+	seenD, seenF := map[string]bool{}, map[string]bool{}
+	for _, p := range patterns {
+		p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+		if p == "" {
+			continue
+		}
+		if strings.HasSuffix(p, "/**") {
+			dir := strings.TrimPrefix(strings.TrimSuffix(p, "/**"), "**/")
+			if i := strings.LastIndex(dir, "/"); i >= 0 {
+				dir = dir[i+1:]
+			}
+			if dir != "" && dir != "**" && !seenD[dir] {
+				seenD[dir] = true
+				xd = append(xd, dir)
+			}
+			continue
+		}
+		base := p
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		if base != "" && !strings.Contains(base, "**") && !seenF[base] {
+			seenF[base] = true
+			xf = append(xf, base)
+		}
+	}
+	return
+}
+
+// MirrorToLive mirrors each app's repo subtree onto its live dir(s) with /MIR
+// (delete extraneous), protecting excluded paths. Repo subtree layout matches
+// what import produced: <repo>/<label>, where label is "" for single-live apps.
+func MirrorToLive(cfg AgentConfig, apps map[string]AppSpec) error {
+	for name, app := range apps {
+		if app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		xd, xf := robocopyExcludes(app.Exclude)
+		labels := liveLabels(app.Live)
+		for _, live := range app.Live {
+			src := filepath.Join(cfg.RepoPath, filepath.FromSlash(app.Repo))
+			if lbl := labels[live]; lbl != "" {
+				src = filepath.Join(src, lbl)
+			}
+			if _, err := os.Stat(src); err != nil {
+				log.Printf("[mirror] %s: repo subtree %s missing, skipping", name, src)
+				continue
+			}
+			dst := filepath.FromSlash(live)
+			if err := robocopyMirror(src, dst, xd, xf); err != nil {
+				return fmt.Errorf("mirror %s -> %s: %w", name, dst, err)
+			}
+			log.Printf("[mirror] %s: %s -> %s", name, src, dst)
+		}
+	}
+	return nil
+}
+
+func robocopyMirror(src, dst string, xd, xf []string) error {
+	args := []string{src, dst, "/MIR", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP"}
+	for _, d := range xd {
+		args = append(args, "/XD", d)
+	}
+	if len(xf) > 0 {
+		args = append(args, "/XF")
+		args = append(args, xf...)
+	}
+	cmd := exec.Command("robocopy", args...)
+	out, _ := cmd.CombinedOutput() // robocopy returns 1 on success-with-copies
+	if cmd.ProcessState == nil {
+		return fmt.Errorf("robocopy did not run (Windows only): %s", out)
+	}
+	if code := cmd.ProcessState.ExitCode(); code >= 8 {
+		return fmt.Errorf("robocopy exit %d: %s", code, string(out))
+	}
+	return nil
+}
+
+// RestartApps stops the versioned apps' running instances and relaunches them in
+// start_delay order (preserving launcher.json sequencing). Apps without a repo
+// (e.g. ImmersiveDisplayPRO) are left alone.
+func RestartApps(apps map[string]AppSpec) {
+	type item struct {
+		name string
+		spec AppSpec
+	}
+	var items []item
+	exeNames := map[string]bool{}
+	for name, app := range apps {
+		if app.Run == "" || app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		items = append(items, item{name, app})
+		exeNames[filepath.Base(filepath.FromSlash(app.Run))] = true
+	}
+	// Stop running instances (apps that share an exe, e.g. the displays, die once).
+	for exe := range exeNames {
+		_ = exec.Command("taskkill", "/F", "/IM", exe).Run()
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].spec.StartDelay < items[j].spec.StartDelay })
+	start := time.Now()
+	for _, it := range items {
+		target := time.Duration(it.spec.StartDelay) * time.Second
+		if d := target - time.Since(start); d > 0 {
+			time.Sleep(d)
+		}
+		run := filepath.FromSlash(it.spec.Run)
+		cmd := exec.Command(run)
+		cmd.Dir = filepath.Dir(run)
+		if err := cmd.Start(); err != nil {
+			log.Printf("[restart] %s failed: %v", it.name, err)
+			continue
+		}
+		log.Printf("[restart] launched %s (delay %ds)", it.name, it.spec.StartDelay)
+	}
+}
+
+// CheckClean reports whether live matches the deployed ref (best-effort): a
+// robocopy /L (list-only) /MIR per live dir; any would-be copy/extra = drift.
+func CheckClean(cfg AgentConfig, apps map[string]AppSpec) bool {
+	for _, app := range apps {
+		if app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		xd, xf := robocopyExcludes(app.Exclude)
+		labels := liveLabels(app.Live)
+		for _, live := range app.Live {
+			src := filepath.Join(cfg.RepoPath, filepath.FromSlash(app.Repo))
+			if lbl := labels[live]; lbl != "" {
+				src = filepath.Join(src, lbl)
+			}
+			if _, err := os.Stat(src); err != nil {
+				continue
+			}
+			if drifted(src, filepath.FromSlash(live), xd, xf) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func drifted(src, dst string, xd, xf []string) bool {
+	args := []string{src, dst, "/MIR", "/L", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:0", "/W:0"}
+	for _, d := range xd {
+		args = append(args, "/XD", d)
+	}
+	if len(xf) > 0 {
+		args = append(args, "/XF")
+		args = append(args, xf...)
+	}
+	cmd := exec.Command("robocopy", args...)
+	_ = cmd.Run()
+	if cmd.ProcessState == nil {
+		return false
+	}
+	code := cmd.ProcessState.ExitCode()
+	if code >= 8 {
+		return false // listing error; don't flap to dirty
+	}
+	return code&0x3 != 0 // bit0 = copies needed, bit1 = extras in dest
+}
