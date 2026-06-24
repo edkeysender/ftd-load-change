@@ -1,0 +1,8 @@
+# Build artifacts and local state — never committed.
+dist/
+.venv/
+__pycache__/
+*.pyc
+*.db
+# Local agent config (per-PC, holds the token)
+agent/agent.json

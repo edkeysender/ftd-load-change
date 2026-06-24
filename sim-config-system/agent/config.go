@@ -1,14 +1,15 @@
 package main
 
-// AgentConfig is read from a local agent.yaml on each PC.
+// AgentConfig is read from a local agent.json on each PC. JSON (not YAML) so the
+// agent stays a zero-dependency, fully static binary.
 type AgentConfig struct {
-	PCIP           string `yaml:"pc_ip"`           // this PC's IP, key into the manifest
-	Folder         string `yaml:"folder"`          // its monorepo folder, e.g. pc-12-display
-	CoordinatorURL string `yaml:"coordinator_url"` // e.g. https://70.84.68.2:8080
-	Token          string `yaml:"token"`           // shared bearer token (OPEN Q: mTLS)
-	RepoPath       string `yaml:"repo_path"`       // local sparse clone path, e.g. D:/sim-config
-	GitRemote      string `yaml:"git_remote"`      // Forgejo URL
-	GitExe         string `yaml:"git_exe"`         // bundled portable git.exe
+	PCIP           string `json:"pc_ip"`           // this PC's IP, key into the manifest
+	Folder         string `json:"folder"`          // its monorepo folder, e.g. pc-12-display
+	CoordinatorURL string `json:"coordinator_url"` // e.g. http://70.84.68.196:8090
+	Token          string `json:"token"`           // shared bearer token (OPEN Q: mTLS)
+	RepoPath       string `json:"repo_path"`       // local sparse clone path, e.g. D:/sim-config (deploy only)
+	GitRemote      string `json:"git_remote"`      // Forgejo URL (deploy only; not needed for import)
+	GitExe         string `json:"git_exe"`         // git.exe path (deploy only); "git" if on PATH
 }
 
 // State is the agent's place in the lifecycle (see PROJECT_SPEC.md section 8).

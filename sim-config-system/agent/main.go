@@ -19,7 +19,7 @@ type Agent struct {
 }
 
 func main() {
-	cfg := LoadConfig("agent.yaml") // TODO: also accept Windows service args
+	cfg := LoadConfig("agent.json") // TODO: also accept Windows service args
 	a := &Agent{cfg: cfg, state: StateUnseeded, api: NewClient(cfg)}
 	a.Run()
 }

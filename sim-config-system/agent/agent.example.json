@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to agent.json next to simagent.exe on each PC and fill in. One per machine.",
+
+  "pc_ip": "70.84.68.12",
+  "folder": "pc-12-display",
+
+  "coordinator_url": "http://70.84.68.196:8090",
+  "token": "PASTE_TOKEN_FROM_/etc/sim-config.env_ON_THE_PI",
+
+  "_note": "repo_path/git_remote/git_exe are only used for deploy (Phase 2). Import works without them.",
+  "repo_path": "D:/sim-config",
+  "git_remote": "http://70.84.68.196:3000/sim/sim-config.git",
+  "git_exe": "git"
+}

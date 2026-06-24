@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"os"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Client struct {
@@ -33,7 +31,7 @@ func LoadConfig(path string) AgentConfig {
 		panic(err)
 	}
 	var c AgentConfig
-	if err := yaml.Unmarshal(b, &c); err != nil {
+	if err := json.Unmarshal(b, &c); err != nil {
 		panic(err)
 	}
 	return c
