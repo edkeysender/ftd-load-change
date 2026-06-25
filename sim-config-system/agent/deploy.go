@@ -56,15 +56,26 @@ func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 	if out, err := gitCmd(cfg, "fetch", "--prune", "--tags", "origin"); err != nil {
 		return fmt.Errorf("fetch: %v: %s", err, out)
 	}
-	// Branch (training-live/dev) -> reset local to remote tip; otherwise a tag/sha.
+	// Resolve to the target object: a branch (training-live/dev) tracks its remote
+	// tip; otherwise it's a tag/sha.
+	target := ref
 	if _, err := gitCmd(cfg, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+ref); err == nil {
-		if out, err := gitCmd(cfg, "checkout", "-f", "-B", ref, "refs/remotes/origin/"+ref); err != nil {
+		target = "refs/remotes/origin/" + ref
+		if out, err := gitCmd(cfg, "checkout", "-f", "-B", ref, target); err != nil {
 			return fmt.Errorf("checkout branch %s: %v: %s", ref, err, out)
 		}
-	} else {
-		if out, err := gitCmd(cfg, "checkout", "-f", ref); err != nil {
-			return fmt.Errorf("checkout ref %s: %v: %s", ref, err, out)
-		}
+	} else if out, err := gitCmd(cfg, "checkout", "-f", ref); err != nil {
+		return fmt.Errorf("checkout ref %s: %v: %s", ref, err, out)
+	}
+	// Force the worktree to match the ref EXACTLY: discard tracked edits AND any
+	// untracked leftovers (e.g. files a prior capture wrote into the sparse
+	// worktree). git checkout alone never removes untracked files, so without this
+	// deploy could not guarantee determinism — stale files would be mirrored to live.
+	if out, err := gitCmd(cfg, "reset", "--hard", target); err != nil {
+		return fmt.Errorf("reset --hard %s: %v: %s", target, err, out)
+	}
+	if out, err := gitCmd(cfg, "clean", "-fd", "--", folder); err != nil {
+		return fmt.Errorf("clean: %v: %s", err, out)
 	}
 	return nil
 }
