@@ -52,6 +52,14 @@ live locations is modified during import.
 Keep the existing `launcher.json` rsync flow running in parallel until the new deploy
 path is trusted.
 
+## Web UI
+
+Open `http://<pi-ip>:8090/` for the operational dashboard (served by the
+coordinator, single page, no build step): PC status grid, version history with
+per-version rollback, deploy button, dev session panel (start/end, per-PC capture,
+promote), bootstrap (import / size-report / seal v1.0), and LAN discovery. Enter
+your name (top-right) — it's used as the author/lock holder for dev/seal/promote.
+
 ## API summary
 
 Operator: `GET /pcs`, `GET /versions`, `GET /bootstrap`, `POST /import/{pc}`,

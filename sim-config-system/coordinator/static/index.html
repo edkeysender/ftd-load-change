@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sim Config Coordinator</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         margin: 0; background: #f1efe8; color: #2c2c2a; }
+  header { background: #2c2c2a; color: #fff; padding: 14px 24px;
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+  header .grow { flex: 1; }
+  header input { padding: 6px 8px; border-radius: 6px; border: none; font-size: 13px; }
+  header a { color: #9fd5c0; font-size: 13px; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
+  section { background: #fff; border-radius: 12px; padding: 18px 20px; margin-bottom: 18px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+  section h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1px;
+               color: #5f5e5a; margin: 0 0 14px; display: flex; align-items: center; gap: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ece9e0; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #908e86; }
+  tr:last-child td { border-bottom: none; }
+  button { padding: 6px 12px; font-size: 13px; font-weight: 500; border: none; border-radius: 7px;
+           cursor: pointer; background: #2c2c2a; color: #fff; }
+  button:hover { opacity: .88; }
+  button.ghost { background: #ece9e0; color: #2c2c2a; }
+  button.warn { background: #b3541e; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px;
+          font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+  .pill.training { background: #e1f5ee; color: #1d7a59; }
+  .pill.dev_tracking, .pill.deploying, .pill.capturing { background: #faeeda; color: #99641a; }
+  .pill.unseeded, .pill.idle { background: #eee; color: #777; }
+  .pill.error { background: #fbe2e1; color: #c0392b; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.on { background: #27ae60; } .dot.off { background: #c9c6bd; }
+  .ok { color: #1d7a59; } .bad { color: #c0392b; } .muted { color: #908e86; }
+  .live-badge { background: #1d7a59; color: #fff; padding: 1px 7px; border-radius: 5px; font-size: 10px; }
+  .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  #toast { position: fixed; bottom: 18px; right: 18px; background: #2c2c2a; color: #fff;
+           padding: 10px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s;
+           max-width: 380px; }
+  #toast.show { opacity: 1; }
+  #toast.err { background: #c0392b; }
+  code { background: #f1efe8; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .hint { font-size: 12px; color: #908e86; margin: -6px 0 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sim Config Coordinator</h1>
+  <span class="grow"></span>
+  <label style="font-size:12px">you: <input id="user" placeholder="your name" size="10"></label>
+  <a id="forgejo" href="#" target="_blank" style="display:none">Forgejo ↗</a>
+  <span id="clock" class="muted" style="font-size:12px"></span>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <h2>PC status</h2>
+    <table>
+      <thead><tr><th>PC</th><th>Role</th><th>Online</th><th>Mode</th><th>Ref</th><th>State</th><th>Last seen</th></tr></thead>
+      <tbody id="grid"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Versions <button class="ghost" style="margin-left:auto" onclick="deploy()">Deploy training-live</button></h2>
+    <div class="hint">Immutable <code>v1.x</code> tags. The live badge marks what <code>training-live</code> points at.</div>
+    <table>
+      <thead><tr><th>Version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
+      <tbody id="versions"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Dev session</h2>
+    <div id="devlock" class="hint"></div>
+    <div class="row-actions" style="margin-bottom:14px">
+      <button onclick="startDev()">Start dev session</button>
+      <button class="ghost" onclick="endDev()">End session</button>
+      <button class="warn" onclick="promote()">Promote dev → new version</button>
+    </div>
+    <table>
+      <thead><tr><th>PC</th><th>Mode</th><th></th></tr></thead>
+      <tbody id="devpcs"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Bootstrap</h2>
+    <div class="hint">Import each PC read-only, review sizes, then seal <code>v1.0</code>. Missing live dirs are flagged for path reconciliation.</div>
+    <table>
+      <thead><tr><th>PC</th><th>Imported</th><th>Size</th><th>Flags</th><th></th></tr></thead>
+      <tbody id="bootstrap"></tbody>
+    </table>
+    <div class="row-actions" style="margin-top:12px">
+      <button onclick="seal()">Create master (v1.0)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Discovery <button class="ghost" id="scanbtn" style="margin-left:auto" onclick="scan()">Scan LAN</button></h2>
+    <div class="hint">Ping-sweeps the subnet. <span class="ok">in manifest</span> / <span style="color:#1d7a59">has agent</span> show which machines are managed.</div>
+    <table>
+      <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Manifest</th><th>Agent</th><th>Listed</th><th></th></tr></thead>
+      <tbody id="hosts"></tbody>
+    </table>
+  </section>
+
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let scanning = false;
+
+function toast(msg, isErr) {
+  const t = $('toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
+  setTimeout(() => t.className = '', 3500);
+}
+async function api(method, path, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  const text = await r.text();
+  let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (e) {}
+  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  return data;
+}
+const who = () => ($('user').value || '').trim();
+function requireUser() {
+  if (!who()) { toast('Enter your name (top right) first', true); throw new Error('no user'); }
+  return who();
+}
+const ago = ts => {
+  if (!ts) return '—';
+  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  return Math.floor(s/3600) + 'h ago';
+};
+const fmtBytes = n => {
+  if (!n) return '0';
+  const u = ['B','KB','MB','GB','TB']; let i = 0; n = +n;
+  while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return n.toFixed(i ? 1 : 0) + u[i];
+};
+const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let MANIFEST = [];   // [{ip, folder, role, apps}]
+
+async function refresh() {
+  try {
+    const [pcs, vers, boot, mpcs, cfg] = await Promise.all([
+      api('GET', '/pcs'), api('GET', '/versions'), api('GET', '/bootstrap'),
+      api('GET', '/manifest/pcs'), api('GET', '/config'),
+    ]);
+    MANIFEST = mpcs.pcs;
+    const agents = {}; (pcs.agents || []).forEach(a => agents[a.pc_ip] = a);
+    renderGrid(MANIFEST, agents);
+    renderVersions(vers);
+    renderDev(MANIFEST, agents, pcs.dev_lock);
+    renderBootstrap(MANIFEST, boot);
+    if (cfg.forgejo_url) { const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
+    if (!scanning) renderHosts(await api('GET', '/discover'));
+    $('clock').textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) { $('clock').textContent = 'offline: ' + e.message; }
+}
+
+function renderGrid(pcs, agents) {
+  $('grid').innerHTML = pcs.map(p => {
+    const a = agents[p.ip] || {};
+    const mode = (a.mode || 'UNSEEDED');
+    const clean = a.mode === 'TRAINING' ? (a.clean ? '<span class="ok">clean</span>' : '<span class="bad">dirty</span>') : '';
+    return `<tr>
+      <td><b>${esc(p.ip)}</b><br><span class="muted">${esc(p.folder||'')}</span></td>
+      <td>${esc(p.role||'')}</td>
+      <td><span class="dot ${a.online?'on':'off'}"></span>${a.online?'online':'offline'}</td>
+      <td><span class="pill ${mode.toLowerCase()}">${esc(mode)}</span></td>
+      <td>${esc(a.current_ref||'—')}</td>
+      <td>${clean}</td>
+      <td class="muted">${ago(a.last_seen)}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">No PCs in manifest.</td></tr>';
+}
+
+function renderVersions(v) {
+  const live = v.training_live_sha;
+  $('versions').innerHTML = (v.versions || []).map(x => {
+    const isLive = live && x.commit_sha && x.commit_sha === live;
+    return `<tr>
+      <td><b>${esc(x.tag)}</b> ${isLive ? '<span class="live-badge">LIVE</span>' : ''}</td>
+      <td>${esc(x.message)}</td><td>${esc(x.author)}</td>
+      <td class="muted">${ago(x.created_at)}</td>
+      <td class="row-actions">${isLive ? '' : `<button class="ghost" onclick="rollback('${esc(x.tag)}')">Rollback to this</button>`}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">No versions yet — seal v1.0 in Bootstrap.</td></tr>';
+}
+
+function renderDev(pcs, agents, lock) {
+  $('devlock').innerHTML = lock
+    ? `Lock held by <b>${esc(lock)}</b> — agents track <code>dev</code>.`
+    : 'No active dev session.';
+  $('devpcs').innerHTML = pcs.map(p => {
+    const a = agents[p.ip] || {};
+    return `<tr><td><b>${esc(p.ip)}</b> <span class="muted">${esc(p.folder||'')}</span></td>
+      <td><span class="pill ${(a.mode||'unseeded').toLowerCase()}">${esc(a.mode||'UNSEEDED')}</span></td>
+      <td><button class="ghost" ${lock?'':'disabled'} onclick="capture('${esc(p.ip)}')">Capture</button></td></tr>`;
+  }).join('');
+}
+
+function renderBootstrap(pcs, boot) {
+  const imp = {}; (boot.imports || []).forEach(i => imp[i.pc_ip] = i);
+  const sz = {}; (boot.sizes || []).forEach(s => sz[s.pc_ip] = s);
+  $('bootstrap').innerHTML = pcs.map(p => {
+    const i = imp[p.ip], s = sz[p.ip];
+    const total = s ? Object.values(s.sizes || {}).reduce((a,b) => a + (+b||0), 0) : null;
+    const miss = (i && i.missing && i.missing.length) ? `<span class="bad">${i.missing.length} missing dir(s)</span>` : '';
+    return `<tr>
+      <td><b>${esc(p.ip)}</b> <span class="muted">${esc(p.folder||'')}</span></td>
+      <td>${i ? `${i.file_count} files (${fmtBytes(i.byte_count)})<br><span class="muted">${ago(i.imported_at)}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${total != null ? fmtBytes(total) : '<span class="muted">—</span>'}</td>
+      <td>${miss}</td>
+      <td class="row-actions">
+        <button class="ghost" onclick="sizeReport('${esc(p.ip)}')">Size report</button>
+        <button onclick="importPc('${esc(p.ip)}')">Import</button>
+      </td></tr>`;
+  }).join('');
+}
+
+function renderHosts(d) {
+  const rows = (d.hosts || []);
+  $('hosts').innerHTML = rows.map(h => `<tr>
+      <td><b>${esc(h.ip)}</b></td><td>${esc(h.hostname||'—')}</td><td class="muted">${esc(h.mac||'—')}</td>
+      <td>${h.in_manifest ? '<span class="ok">yes</span>'+(h.folder?` <span class="muted">(${esc(h.folder)})</span>`:'') : '<span class="muted">no</span>'}</td>
+      <td>${h.has_agent ? '<span class="ok">yes</span>' : '<span class="muted">no</span>'}</td>
+      <td>${h.listed ? 'listed' : ''}</td>
+      <td class="row-actions">${h.listed
+        ? `<button class="ghost" onclick="removeHost('${esc(h.ip)}')">Remove</button>`
+        : `<button class="ghost" onclick="addHost('${esc(h.ip)}')">Add to list</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="7" class="muted">Nothing discovered yet — click Scan LAN.</td></tr>';
+}
+
+// ---- actions ----
+async function act(fn, msg) { try { await fn(); if (msg) toast(msg); await refresh(); } catch (e) { toast(e.message, true); } }
+const deploy   = () => act(() => api('POST', '/deploy', {}), 'Deploying training-live…');
+const rollback = t => confirm('Roll back training-live to ' + t + ' and redeploy?') && act(() => api('POST', '/rollback', { tag: t }), 'Rolling back to ' + t);
+const startDev = () => act(() => api('POST', '/dev/start', { user: requireUser() }), 'Dev session started');
+const endDev   = () => act(() => api('POST', '/dev/end', {}), 'Dev session ended');
+const capture  = pc => act(() => api('POST', '/dev/capture', { pc }), 'Capturing ' + pc + '…');
+const importPc = pc => act(() => api('POST', '/import/' + pc, {}), 'Import queued for ' + pc);
+const sizeReport = pc => act(() => api('POST', '/import/' + pc + '/size-report', {}), 'Size report queued for ' + pc);
+const addHost   = ip => act(() => api('POST', '/discover/add', { ip }), ip + ' added to list');
+const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip + ' removed');
+
+function promote() {
+  const author = requireUser();
+  const msg = prompt('Version message (what changed in dev)?');
+  if (!msg) return;
+  act(() => api('POST', '/promote', { message: msg, author }), 'Promoting → new version…');
+}
+function seal() {
+  const author = requireUser();
+  const msg = prompt('Baseline message for v1.0?', 'initial baseline');
+  if (!msg) return;
+  act(() => api('POST', '/seal-baseline', { message: msg, author }), 'Sealing v1.0…');
+}
+async function scan() {
+  scanning = true; $('scanbtn').disabled = true; $('scanbtn').textContent = 'Scanning…';
+  try { renderHosts(await api('POST', '/discover', {})); toast('Scan complete'); }
+  catch (e) { toast(e.message, true); }
+  finally { scanning = false; $('scanbtn').disabled = false; $('scanbtn').textContent = 'Scan LAN'; }
+}
+
+$('user').value = localStorage.getItem('simUser') || '';
+$('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

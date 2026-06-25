@@ -4,11 +4,38 @@ The coordinator is the single git writer and the orchestration brain. Agents are
 read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header, Body
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from . import config, db, discovery, git_ops, manifest
 
 app = FastAPI(title="Sim Config Coordinator")
+
+_STATIC = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/")
+def dashboard():
+    """Operational web UI (single page; calls the JSON API below)."""
+    return FileResponse(_STATIC / "index.html")
+
+
+@app.get("/config")
+def ui_config():
+    return {"forgejo_url": config.FORGEJO_URL,
+            "training_live": config.TRAINING_LIVE, "dev_branch": config.DEV_BRANCH}
+
+
+@app.get("/manifest/pcs")
+def manifest_pcs():
+    """Authoritative PC list from the manifest (so the UI can render rows before
+    any agent has connected)."""
+    out = []
+    for ip, spec in manifest.load_manifest()["pcs"].items():
+        out.append({"ip": ip, "folder": spec.get("folder"), "role": spec.get("role"),
+                    "apps": list((spec.get("apps") or {}).keys())})
+    return {"pcs": out}
 
 
 @app.on_event("startup")
