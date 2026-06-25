@@ -85,6 +85,24 @@ curl -X POST http://localhost:8090/seal-baseline \
   -d '{"message":"initial real baseline","author":"yourname"}'
 ```
 
+## Dev capture / promote (Phase 3) — needs a git remote
+
+Drive it from the web UI Dev panel, or via the API:
+
+```bash
+curl -s -X POST http://localhost:8090/dev/start   -H 'Content-Type: application/json' -d '{"user":"yourname"}'
+# engineer edits live config through the running apps on a PC...
+curl -s -X POST http://localhost:8090/dev/capture -H 'Content-Type: application/json' -d '{"pc":"70.84.68.12"}'
+#   agent: checkout dev -> quiesce apps -> mirror live->worktree -> diff vs dev -> upload bundle.
+#   coordinator commits the bundle to dev (attributed to the lock holder, serialized).
+curl -s "http://localhost:8090/diff?base=v1.0&head=dev"            # changed-file list + Forgejo link
+curl -s -X POST http://localhost:8090/promote     -H 'Content-Type: application/json' -d '{"message":"tuned X","author":"yourname"}'
+curl -s -X POST http://localhost:8090/dev/end
+```
+
+Capture **quiesces (stops) the apps** on that PC to release file handles, then
+relaunches them — expect a brief restart on the captured PC.
+
 ## Deploy (Phase 2) — needs a git remote
 
 Import uploads *to* the coordinator, so it needs no git. Deploy is the reverse: the

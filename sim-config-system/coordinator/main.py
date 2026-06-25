@@ -212,7 +212,9 @@ class CaptureReq(BaseModel):
 def dev_capture(req: CaptureReq):
     if not db.lock_holder():
         raise HTTPException(409, "no active dev session")
-    manifest.enqueue(req.pc, {"type": "capture", "folder": manifest.pc_folder(req.pc)})
+    manifest.enqueue(req.pc, {"type": "capture", "ref": config.DEV_BRANCH,
+                              "folder": manifest.pc_folder(req.pc),
+                              "apps": manifest.resolved_apps(req.pc)})
     return {"capturing": req.pc}
 
 
@@ -296,12 +298,16 @@ def size_report_result(pc_ip: str, payload: dict = Body(...), authorization: str
 
 @app.post("/agents/{pc_ip}/capture-result")
 def capture_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    """Apply a dev-capture bundle to the dev branch, attributed to the lock holder.
+    Serialized with all other git writes so multi-PC captures don't race."""
     _auth(authorization)
-    # payload: {folder, message, author, files: {rel_path: base64}}
-    files = {p: base64.b64decode(b) for p, b in payload["files"].items()}
-    sha = git_ops.apply_capture_bundle(payload["folder"], files,
-                                        payload["message"], payload["author"])
-    return {"committed": sha}
+    files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
+    deleted = payload.get("deleted", [])
+    author = db.lock_holder() or "dev"
+    folder = payload.get("folder", "")
+    message = payload.get("message") or f"dev capture from {pc_ip} ({folder})"
+    sha = git_ops.apply_capture_bundle(files, deleted, message, author)
+    return {"committed": sha, "changed": len(files), "deleted": len(deleted)}
 
 
 @app.post("/agents/{pc_ip}/deploy-result")

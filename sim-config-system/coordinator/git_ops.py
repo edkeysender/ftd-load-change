@@ -2,8 +2,14 @@
 This module is the ONLY place that commits, merges, tags, and pushes."""
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from . import config
+
+# Serializes every git-writing operation (stage/seal/capture/promote/rollback) so
+# concurrent requests — e.g. captures from .11 and .12 in one dev session — never
+# race on the single working clone. This is the lock the spec relies on.
+_WRITE_LOCK = threading.Lock()
 
 
 def _git(*args, check=True):
@@ -76,13 +82,14 @@ def stage_import_bundle(folder: str, files: dict):
     """Stage an imported PC tree into the working clone. File keys are repo paths
     already prefixed with <folder> (e.g. "pc-12-display/displays/CPTInboard/x").
     Idempotent: the PC folder is cleared first, so re-import replaces it."""
-    target_folder = config.WORK_CLONE / folder
-    if target_folder.exists():
-        shutil.rmtree(target_folder)
-    for rel_path, content in files.items():
-        dst = config.WORK_CLONE / rel_path
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(content)
+    with _WRITE_LOCK:
+        target_folder = config.WORK_CLONE / folder
+        if target_folder.exists():
+            shutil.rmtree(target_folder)
+        for rel_path, content in files.items():
+            dst = config.WORK_CLONE / rel_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(content)
 
 
 def commit_all(message: str, author: str):
@@ -103,43 +110,52 @@ def seal_baseline(message: str, author: str):
     Idempotent: if v1.0 already exists this returns its commit and changes nothing.
     Versions are immutable — once sealed, use dev -> capture -> promote to make new
     versions, not a re-seal."""
-    if _ref_exists("refs/tags/v1.0"):
-        return head_sha("v1.0^{commit}")
-    sha = commit_all(message, author)
-    _git(*_ident(author), "tag", "-a", "v1.0", "-m", message)
-    _git("branch", "-f", config.DEV_BRANCH, config.MASTER)
-    _git("branch", "-f", config.TRAINING_LIVE, "v1.0")
-    _push(config.MASTER, config.DEV_BRANCH, config.TRAINING_LIVE, "v1.0")
-    return sha
+    with _WRITE_LOCK:
+        if _ref_exists("refs/tags/v1.0"):
+            return head_sha("v1.0^{commit}")
+        sha = commit_all(message, author)
+        _git(*_ident(author), "tag", "-a", "v1.0", "-m", message)
+        _git("branch", "-f", config.DEV_BRANCH, config.MASTER)
+        _git("branch", "-f", config.TRAINING_LIVE, "v1.0")
+        _push(config.MASTER, config.DEV_BRANCH, config.TRAINING_LIVE, "v1.0")
+        return sha
 
 
-def apply_capture_bundle(folder: str, files: dict, message: str, author: str):
-    """Write captured files into <folder> on the dev branch and commit (serialized by caller)."""
-    _git("checkout", config.DEV_BRANCH)
-    base = config.WORK_CLONE / folder
-    for rel_path, content in files.items():
-        target = base / rel_path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
-    return commit_all(message, author)
+def apply_capture_bundle(files: dict, deleted: list, message: str, author: str):
+    """Apply a dev-capture diff onto the dev branch and commit. File keys are
+    repo-root-relative (e.g. "pc-12-display/displays/CPTInboard/x"); `deleted` are
+    paths to remove. Serialized with all other git writes."""
+    with _WRITE_LOCK:
+        _git("checkout", config.DEV_BRANCH)
+        for rel_path, content in files.items():
+            target = config.WORK_CLONE / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        for rel_path in deleted or []:
+            p = config.WORK_CLONE / rel_path
+            if p.exists():
+                p.unlink()
+        return commit_all(message, author)
 
 
 def promote(message: str, author: str, new_tag: str):
     """Squash-merge dev into master, tag the new version, move training-live."""
-    _git("checkout", config.MASTER)
-    _git("merge", "--squash", config.DEV_BRANCH)
-    sha = commit_all(f"{new_tag}: {message}", author)
-    _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
-    _git("branch", "-f", config.TRAINING_LIVE, new_tag)
-    _push(config.MASTER, config.TRAINING_LIVE, new_tag)
-    return sha
+    with _WRITE_LOCK:
+        _git("checkout", config.MASTER)
+        _git("merge", "--squash", config.DEV_BRANCH)
+        sha = commit_all(f"{new_tag}: {message}", author)
+        _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
+        _git("branch", "-f", config.TRAINING_LIVE, new_tag)
+        _push(config.MASTER, config.TRAINING_LIVE, new_tag)
+        return sha
 
 
 def rollback(tag: str):
     """Point training-live at an older immutable tag (deploy happens separately)."""
-    _git("branch", "-f", config.TRAINING_LIVE, tag)
-    _push(config.TRAINING_LIVE)
-    return head_sha(config.TRAINING_LIVE)
+    with _WRITE_LOCK:
+        _git("branch", "-f", config.TRAINING_LIVE, tag)
+        _push(config.TRAINING_LIVE)
+        return head_sha(config.TRAINING_LIVE)
 
 
 def changed_files(base: str, head: str):

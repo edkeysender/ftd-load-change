@@ -82,13 +82,16 @@ func (c *Client) PollCommand() (*Command, error) {
 	return out.Command, nil
 }
 
-func (c *Client) UploadCaptureBundle(pcIP, folder, message, author string, files map[string][]byte) error {
-	enc := map[string]string{}
-	for p, b := range files {
+// UploadCaptureBundle posts the dev-capture diff (changed files + deletions). The
+// agent does not set the author/message — the coordinator attributes the commit
+// to the dev-session lock holder.
+func (c *Client) UploadCaptureBundle(pcIP, folder string, changed map[string][]byte, deleted []string) error {
+	enc := make(map[string]string, len(changed))
+	for p, b := range changed {
 		enc[p] = b64(b)
 	}
 	resp, err := c.do("POST", "/agents/"+pcIP+"/capture-result", map[string]any{
-		"folder": folder, "message": message, "author": author, "files": enc,
+		"folder": folder, "files": enc, "deleted": deleted,
 	})
 	if err != nil {
 		return err

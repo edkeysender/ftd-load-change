@@ -117,26 +117,35 @@ func (a *Agent) doTrack(c Command) {
 	log.Printf("[track] done -> DEV_TRACKING @ %s", c.Ref)
 }
 
-// doCapture (Phase 3): quiesce apps, mirror live->worktree, bundle changed files, upload.
+// doCapture (Phase 3): checkout dev (clean base), quiesce apps, mirror live->
+// worktree, compute the diff vs dev, upload the bundle, then relaunch apps and
+// return to DEV_TRACKING. The coordinator commits the bundle to dev under the lock.
 func (a *Agent) doCapture(c Command) {
 	a.setState(StateCapturing)
-	log.Printf("[capture] folder=%s", c.Folder)
-	QuiesceApps(a.cfg) // graceful stop so files aren't mid-write (OPEN Q: force-kill fallback)
-	if err := MirrorToWorktree(a.cfg); err != nil { // live -> worktree, honoring excludes
+	log.Printf("[capture] folder=%s apps=%d", c.Folder, len(c.Apps))
+	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil { // ref = dev
 		a.fail(err)
 		return
 	}
-	files, err := ChangedFilesVsDev(a.cfg) // map[relpath][]byte for changes vs dev
+	QuiesceApps(c.Apps) // close file handles before snapshotting
+	if err := MirrorToWorktree(a.cfg, c.Apps); err != nil {
+		a.fail(err)
+		return
+	}
+	changed, deleted, err := ChangedFilesVsDev(a.cfg, c.Folder)
 	if err != nil {
 		a.fail(err)
 		return
 	}
-	if err := a.api.UploadCaptureBundle(a.cfg.PCIP, c.Folder,
-		"dev capture", "TODO-session-user", files); err != nil {
+	log.Printf("[capture] %d changed, %d deleted; uploading", len(changed), len(deleted))
+	if err := a.api.UploadCaptureBundle(a.cfg.PCIP, c.Folder, changed, deleted); err != nil {
 		a.fail(err)
 		return
 	}
+	RestartApps(c.Apps) // resume the dev session
+	a.remember(c, true)
 	a.setState(StateDevTracking)
+	log.Printf("[capture] done")
 }
 
 func (a *Agent) fail(err error) {
@@ -145,21 +154,3 @@ func (a *Agent) fail(err error) {
 }
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
-
-// ===================== Phase-3 platform stubs (capture) =================
-// GitFetchCheckout / MirrorToLive / RestartApps / CheckClean now live in
-// deploy.go (Phase 2). These remain stubs until Phase 3.
-
-func MirrorToWorktree(cfg AgentConfig) error {
-	// TODO: reverse mirror app.live -> worktree, honoring excludes.
-	return nil
-}
-
-func ChangedFilesVsDev(cfg AgentConfig) (map[string][]byte, error) {
-	// TODO: git status --porcelain in the sparse folder; read changed file bytes.
-	return map[string][]byte{}, nil
-}
-
-func QuiesceApps(cfg AgentConfig) {
-	// TODO: graceful stop of apps whose files are about to be captured.
-}
