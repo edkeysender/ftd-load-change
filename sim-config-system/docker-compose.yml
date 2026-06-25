@@ -1,7 +1,9 @@
 # Forgejo on the Raspberry Pi. Headless install (no web wizard): the env vars
 # below pre-configure it so it comes up already installed.
 #
-# Driven by deploy/forgejo-setup.sh, which exports PI_HOST + FORGEJO_DATA.
+# OPTIONAL: deploy/forgejo-setup.sh uses a plain `docker run` (no compose needed),
+# so this file is only for those who prefer compose. Run with:
+#   PI_HOST=70.84.68.196 FORGEJO_DATA=/var/lib/forgejo docker compose up -d
 # Put FORGEJO_DATA on an external SSD for real use, not the SD card.
 services:
   forgejo:

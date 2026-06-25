@@ -43,23 +43,31 @@ set_env() {  # upsert KEY=VALUE in the coordinator env file
   fi
 }
 
-# 1. Docker + compose ----------------------------------------------------
+# 1. Docker (engine only; we use `docker run`, no compose needed) -------
 if ! command -v docker >/dev/null 2>&1; then
-  echo "[1/7] Installing Docker..."
-  apt update && apt install -y docker.io docker-compose-v2
-  systemctl enable --now docker
+  echo "[1/7] Installing Docker engine..."
+  apt update && apt install -y docker.io
 fi
-if docker compose version >/dev/null 2>&1; then DC="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then DC="docker-compose"
-else apt install -y docker-compose-v2 && DC="docker compose"; fi
-echo "[1/7] Docker: $(docker --version), compose: $DC"
+systemctl enable --now docker 2>/dev/null || true
+echo "[1/7] Docker: $(docker --version)"
 
-# 2. Start Forgejo -------------------------------------------------------
+# 2. Start Forgejo (plain docker run; data persists in the volume) -------
 echo "[2/7] Starting Forgejo (data=$FORGEJO_DATA)..."
 mkdir -p "$FORGEJO_DATA"
 chown -R 1000:1000 "$FORGEJO_DATA"
-export PI_HOST FORGEJO_DATA
-(cd "$REPO_DIR" && $DC up -d)
+docker rm -f "$CT" >/dev/null 2>&1 || true
+docker run -d --name "$CT" --restart unless-stopped \
+  -p 3000:3000 -p 2222:22 \
+  -v "$FORGEJO_DATA:/data" \
+  -e USER_UID=1000 -e USER_GID=1000 \
+  -e FORGEJO__database__DB_TYPE=sqlite3 \
+  -e FORGEJO__security__INSTALL_LOCK=true \
+  -e FORGEJO__service__DISABLE_REGISTRATION=true \
+  -e FORGEJO__server__DOMAIN="$PI_HOST" \
+  -e FORGEJO__server__HTTP_PORT=3000 \
+  -e FORGEJO__server__ROOT_URL="http://$PI_HOST:3000/" \
+  -e FORGEJO__server__SSH_PORT=2222 \
+  codeberg.org/forgejo/forgejo:7
 
 # 3. Wait until the API answers -----------------------------------------
 echo -n "[3/7] Waiting for Forgejo"
