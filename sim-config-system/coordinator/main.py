@@ -182,6 +182,7 @@ class DeployReq(BaseModel):
 def deploy(req: DeployReq):
     if req.ref != config.TRAINING_LIVE:
         git_ops.rollback(req.ref)  # repoint training-live, then deploy it
+    git_ops.publish_training_live()  # ensure the remote pointer == coordinator's
     _enqueue_deploy_all()
     return {"deploying": config.TRAINING_LIVE}
 

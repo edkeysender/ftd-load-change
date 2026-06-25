@@ -42,6 +42,21 @@ def _push(*refs):
     _git("push", "origin", *refs, check=False)
 
 
+def _push_force(*refs):
+    """Force-push a movable pointer (training-live). Rollback moves training-live
+    backwards, which a normal push rejects as non-fast-forward — so agents would
+    keep fetching the old tip. Force keeps the remote pointer == the coordinator's."""
+    if not _has_remote():
+        return
+    _git("push", "--force", "origin", *refs, check=False)
+
+
+def publish_training_live():
+    """Make the remote training-live match the coordinator's (idempotent). Called
+    before every deploy so agents fetch exactly what is live."""
+    _push_force(config.TRAINING_LIVE)
+
+
 def ensure_repo():
     """Make the working clone usable. If GIT_REMOTE is configured and reachable,
     clone it; otherwise initialise a local repo on `master` so bootstrap works
@@ -124,7 +139,8 @@ def seal_baseline(message: str, author: str):
         _git(*_ident(author), "tag", "-a", "v1.0", "-m", message)
         _git("branch", "-f", config.DEV_BRANCH, config.MASTER)
         _git("branch", "-f", config.TRAINING_LIVE, "v1.0")
-        _push(config.MASTER, config.DEV_BRANCH, config.TRAINING_LIVE, "v1.0")
+        _push(config.MASTER, config.DEV_BRANCH, "v1.0")
+        _push_force(config.TRAINING_LIVE)
         return sha
 
 
@@ -153,15 +169,17 @@ def promote(message: str, author: str, new_tag: str):
         sha = commit_all(f"{new_tag}: {message}", author)
         _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
         _git("branch", "-f", config.TRAINING_LIVE, new_tag)
-        _push(config.MASTER, config.TRAINING_LIVE, new_tag)
+        _push(config.MASTER, new_tag)
+        _push_force(config.TRAINING_LIVE)
         return sha
 
 
 def rollback(tag: str):
-    """Point training-live at an older immutable tag (deploy happens separately)."""
+    """Point training-live at an older immutable tag (deploy happens separately).
+    Force-push: moving the pointer backwards is a non-fast-forward update."""
     with _WRITE_LOCK:
         _git("branch", "-f", config.TRAINING_LIVE, tag)
-        _push(config.TRAINING_LIVE)
+        _push_force(config.TRAINING_LIVE)
         return head_sha(config.TRAINING_LIVE)
 
 
