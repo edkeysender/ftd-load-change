@@ -107,6 +107,13 @@ relaunches them — expect a brief restart on the captured PC.
 
 Import uploads *to* the coordinator, so it needs no git. Deploy is the reverse: the
 agent fetches the repo and mirrors it onto live locations, which requires the repo
-to be served over the network (Forgejo, or `git daemon` on the Pi). Stand up Forgejo
-(`docker compose up -d`), set `SIM_GIT_REMOTE` in `/etc/sim-config.env`, push the
-working clone, then fill in `repo_path` / `git_remote` / `git_exe` in `agent.json`.
+to be served over the network. Stand up Forgejo + wire the coordinator in one step:
+
+```bash
+sudo PI_HOST=70.84.68.196 bash /opt/ftd-load-change/sim-config-system/deploy/forgejo-setup.sh
+```
+
+It prints the `git_remote` URL (e.g. `http://70.84.68.196:3000/sim/sim-config.git`).
+Put that in each PC's `agent.json` as `git_remote`, set `repo_path` (e.g. `D:/sim-config`)
+and `git_exe` (`git` if on PATH, or a bundled portable git), then deploy from the web UI
+or `curl -X POST http://localhost:8090/deploy`.

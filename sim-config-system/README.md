@@ -22,11 +22,16 @@ agent/                  # Go Windows service: poll loop + state machine (each PC
 
 ## Bring-up order
 
-1. **Forgejo** — `docker compose up -d`, create an empty `sim/sim-config` repo, push `repo/` and `manifest.yaml` to it.
-   *Optional for a first local run:* if `SIM_GIT_REMOTE` is unreachable, the coordinator
-   initialises a local `master` repo automatically (`ensure_repo`) and seeds `manifest.yaml`
-   from this folder, so you can exercise import → seal before Forgejo exists. Pushes become
-   no-ops until a remote is reachable.
+1. **Forgejo** (needed for deploy/dev; optional for first import→seal) — one script:
+   ```bash
+   sudo PI_HOST=70.84.68.196 bash deploy/forgejo-setup.sh
+   ```
+   Brings Forgejo up headless, creates the `sim/sim-config` repo + admin + token, pushes the
+   coordinator's working clone, and sets `SIM_GIT_REMOTE`/`SIM_FORGEJO_URL`. It prints the
+   `git_remote` to put in each agent's `agent.json`.
+   *Before Forgejo:* the coordinator runs in local-init mode (`ensure_repo` does a local
+   `git init`, seeds `manifest.yaml`), so import → seal works; pushes are no-ops until the
+   remote exists. Deploy/capture need the remote.
 2. **Coordinator** (on the Pi):
    ```bash
    pip install -r coordinator/requirements.txt

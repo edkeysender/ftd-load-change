@@ -1,4 +1,8 @@
-# Forgejo on the Raspberry Pi. Put data on an external SSD, not the SD card.
+# Forgejo on the Raspberry Pi. Headless install (no web wizard): the env vars
+# below pre-configure it so it comes up already installed.
+#
+# Driven by deploy/forgejo-setup.sh, which exports PI_HOST + FORGEJO_DATA.
+# Put FORGEJO_DATA on an external SSD for real use, not the SD card.
 services:
   forgejo:
     image: codeberg.org/forgejo/forgejo:7
@@ -8,7 +12,15 @@ services:
       - "3000:3000"
       - "2222:22"
     volumes:
-      - /mnt/ssd/forgejo:/data        # external SSD mount
+      - ${FORGEJO_DATA:-/var/lib/forgejo}:/data
     environment:
       - USER_UID=1000
       - USER_GID=1000
+      # Headless install: sqlite DB + locked installer so no setup wizard.
+      - FORGEJO__database__DB_TYPE=sqlite3
+      - FORGEJO__security__INSTALL_LOCK=true
+      - FORGEJO__service__DISABLE_REGISTRATION=true
+      - FORGEJO__server__DOMAIN=${PI_HOST:-localhost}
+      - FORGEJO__server__HTTP_PORT=3000
+      - FORGEJO__server__ROOT_URL=http://${PI_HOST:-localhost}:3000/
+      - FORGEJO__server__SSH_PORT=2222
