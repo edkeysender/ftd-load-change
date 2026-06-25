@@ -70,7 +70,7 @@ def pcs():
 
 @app.get("/versions")
 def versions():
-    live = git_ops.head_sha(config.TRAINING_LIVE) if (config.WORK_CLONE / ".git").exists() else None
+    live = git_ops.ref_sha(config.TRAINING_LIVE) if (config.WORK_CLONE / ".git").exists() else None
     return {"versions": db.list_versions(), "training_live_sha": live}
 
 

@@ -154,22 +154,24 @@ const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&am
 
 let MANIFEST = [];   // [{ip, folder, role, apps}]
 
+const safe = async p => { try { return await p; } catch (e) { return null; } };
+
 async function refresh() {
-  try {
-    const [pcs, vers, boot, mpcs, cfg] = await Promise.all([
-      api('GET', '/pcs'), api('GET', '/versions'), api('GET', '/bootstrap'),
-      api('GET', '/manifest/pcs'), api('GET', '/config'),
-    ]);
+  const [pcs, vers, boot, mpcs, cfg] = await Promise.all([
+    safe(api('GET', '/pcs')), safe(api('GET', '/versions')), safe(api('GET', '/bootstrap')),
+    safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')),
+  ]);
+  const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
+  if (mpcs) {
     MANIFEST = mpcs.pcs;
-    const agents = {}; (pcs.agents || []).forEach(a => agents[a.pc_ip] = a);
     renderGrid(MANIFEST, agents);
-    renderVersions(vers);
-    renderDev(MANIFEST, agents, pcs.dev_lock);
-    renderBootstrap(MANIFEST, boot);
-    if (cfg.forgejo_url) { const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
-    if (!scanning) renderHosts(await api('GET', '/discover'));
-    $('clock').textContent = 'updated ' + new Date().toLocaleTimeString();
-  } catch (e) { $('clock').textContent = 'offline: ' + e.message; }
+    renderDev(MANIFEST, agents, pcs && pcs.dev_lock);
+    if (boot) renderBootstrap(MANIFEST, boot);
+  }
+  if (vers) renderVersions(vers);
+  if (cfg && cfg.forgejo_url) { const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
+  if (!scanning) { const d = await safe(api('GET', '/discover')); if (d) renderHosts(d); }
+  $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
 
 function renderGrid(pcs, agents) {

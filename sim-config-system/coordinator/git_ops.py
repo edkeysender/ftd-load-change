@@ -23,6 +23,13 @@ def head_sha(ref="HEAD"):
     return _git("rev-parse", ref).stdout.strip()
 
 
+def ref_sha(ref):
+    """Resolve a ref to a sha, or None if it doesn't exist yet (e.g. training-live
+    before the first seal). Never raises."""
+    r = _git("rev-parse", "--verify", "--quiet", ref, check=False)
+    return r.stdout.strip() or None
+
+
 def _has_remote() -> bool:
     return bool(_git("remote", check=False).stdout.strip())
 
