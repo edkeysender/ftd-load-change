@@ -153,6 +153,7 @@ const fmtBytes = n => {
 const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let MANIFEST = [];   // [{ip, folder, role, apps}]
+let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 
 const safe = async p => { try { return await p; } catch (e) { return null; } };
 
@@ -168,8 +169,8 @@ async function refresh() {
     renderDev(MANIFEST, agents, pcs && pcs.dev_lock);
     if (boot) renderBootstrap(MANIFEST, boot);
   }
+  if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
-  if (cfg && cfg.forgejo_url) { const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (!scanning) { const d = await safe(api('GET', '/discover')); if (d) renderHosts(d); }
   $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
@@ -194,8 +195,11 @@ function renderVersions(v) {
   const live = v.training_live_sha;
   $('versions').innerHTML = (v.versions || []).map(x => {
     const isLive = live && x.commit_sha && x.commit_sha === live;
+    const tagCell = FORGEJO
+      ? `<a href="${FORGEJO}/src/tag/${encodeURIComponent(x.tag)}" target="_blank"><b>${esc(x.tag)}</b> ↗</a>`
+      : `<b>${esc(x.tag)}</b>`;
     return `<tr>
-      <td><b>${esc(x.tag)}</b> ${isLive ? '<span class="live-badge">LIVE</span>' : ''}</td>
+      <td>${tagCell} ${isLive ? '<span class="live-badge">LIVE</span>' : ''}</td>
       <td>${esc(x.message)}</td><td>${esc(x.author)}</td>
       <td class="muted">${ago(x.created_at)}</td>
       <td class="row-actions">${isLive ? '' : `<button class="ghost" onclick="rollback('${esc(x.tag)}')">Rollback to this</button>`}</td>
