@@ -57,6 +57,8 @@ path is trusted.
 Operator: `GET /pcs`, `GET /versions`, `GET /bootstrap`, `POST /import/{pc}`,
 `POST /import/{pc}/size-report`, `POST /seal-baseline`, `POST /deploy`,
 `POST /dev/start|capture|end`, `GET /diff`, `POST /promote`, `POST /rollback`.
+Discovery: `POST /discover` (ping-sweep the subnet), `GET /discover` (last results),
+`POST /discover/add|remove`, `GET /hosts` (curated list). Helper: `deploy/discover.sh`.
 Agent-facing: `POST /agents/{ip}/heartbeat`, `GET /agents/{ip}/commands`,
 `POST /agents/{ip}/import-result|size-report-result|capture-result|deploy-result`.
 

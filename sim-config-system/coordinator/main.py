@@ -6,7 +6,7 @@ read-only git clients that poll /agents/{ip}/commands and post results.
 import base64
 from fastapi import FastAPI, HTTPException, Header, Body
 from pydantic import BaseModel
-from . import config, db, git_ops, manifest
+from . import config, db, discovery, git_ops, manifest
 
 app = FastAPI(title="Sim Config Coordinator")
 
@@ -51,6 +51,68 @@ def versions():
 def bootstrap_status():
     """Bootstrap panel data: per-PC import status + last size report."""
     return {"imports": db.list_imports(), "sizes": db.list_size_reports()}
+
+
+# ---- host discovery / enrollment list ----------------------------------
+def _enrich_hosts(rows):
+    """Annotate discovered hosts with manifest/agent cross-references."""
+    pcs = manifest.load_manifest()["pcs"]
+    agent_ips = {a["pc_ip"] for a in db.list_agents()}
+    for r in rows:
+        ip = r["ip"]
+        r["in_manifest"] = ip in pcs
+        r["folder"] = pcs.get(ip, {}).get("folder")
+        r["has_agent"] = ip in agent_ips
+        r["listed"] = bool(r["listed"])
+    return rows
+
+
+class DiscoverReq(BaseModel):
+    cidr: str | None = None   # default: /24 derived from the manifest PCs
+
+
+@app.post("/discover")
+def discover(req: DiscoverReq):
+    """Ping-sweep the subnet, record live hosts, and return the list annotated with
+    in_manifest / has_agent so you can see which PCs still need an agent."""
+    cidr = req.cidr or discovery.default_cidr(list(manifest.load_manifest()["pcs"].keys()))
+    if discovery.host_count(cidr) > discovery.MAX_HOSTS:
+        raise HTTPException(400, f"range too large (> {discovery.MAX_HOSTS} hosts); use a smaller CIDR")
+    found = discovery.scan(cidr)
+    for h in found:
+        db.upsert_discovered(h["ip"], h.get("hostname"), h.get("mac"))
+    return {"cidr": cidr, "found": len(found), "hosts": _enrich_hosts(db.list_discovered())}
+
+
+@app.get("/discover")
+def discover_list():
+    """Last known discovery results (no new scan)."""
+    return {"hosts": _enrich_hosts(db.list_discovered())}
+
+
+class HostReq(BaseModel):
+    ip: str
+    note: str | None = None
+
+
+@app.post("/discover/add")
+def discover_add(req: HostReq):
+    """Add a host to the managed list (curate which machines you care about)."""
+    db.set_listed(req.ip, True, req.note)
+    return {"ip": req.ip, "listed": True}
+
+
+@app.post("/discover/remove")
+def discover_remove(req: HostReq):
+    db.set_listed(req.ip, False)
+    return {"ip": req.ip, "listed": False}
+
+
+@app.get("/hosts")
+def hosts():
+    """The curated managed list (hosts the operator added)."""
+    listed = [r for r in _enrich_hosts(db.list_discovered()) if r["listed"]]
+    return {"hosts": listed}
 
 
 @app.post("/import/{pc}")

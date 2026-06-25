@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS size_reports (
     sizes       TEXT,               -- JSON: {app: bytes}
     reported_at REAL
 );
+CREATE TABLE IF NOT EXISTS discovered_hosts (
+    ip         TEXT PRIMARY KEY,    -- host found on the LAN (or manually added)
+    hostname   TEXT,
+    mac        TEXT,
+    listed     INTEGER DEFAULT 0,   -- 1 = operator added it to the managed list
+    note       TEXT,
+    first_seen REAL,
+    last_seen  REAL
+);
 INSERT OR IGNORE INTO dev_session (id, holder, started_at) VALUES (1, NULL, NULL);
 """
 
@@ -175,3 +184,40 @@ def list_size_reports():
     for r in rows:
         r["sizes"] = json.loads(r["sizes"] or "{}")
     return rows
+
+
+# --- discovered hosts ---------------------------------------------------
+def upsert_discovered(ip, hostname, mac):
+    """Record/refresh a host from a network scan. Preserves listed/note/first_seen."""
+    now = time.time()
+    with conn() as c:
+        c.execute(
+            """INSERT INTO discovered_hosts (ip, hostname, mac, first_seen, last_seen)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(ip) DO UPDATE SET
+                 hostname=COALESCE(excluded.hostname, discovered_hosts.hostname),
+                 mac=COALESCE(excluded.mac, discovered_hosts.mac),
+                 last_seen=excluded.last_seen""",
+            (ip, hostname, mac, now, now),
+        )
+
+
+def set_listed(ip, listed, note=None):
+    """Add/remove a host from the managed list. Allows adding an IP that was never
+    discovered (manual entry)."""
+    now = time.time()
+    with conn() as c:
+        cur = c.execute(
+            "UPDATE discovered_hosts SET listed=?, note=COALESCE(?, note) WHERE ip=?",
+            (1 if listed else 0, note, ip),
+        )
+        if cur.rowcount == 0 and listed:
+            c.execute(
+                "INSERT INTO discovered_hosts (ip, listed, note, first_seen, last_seen) VALUES (?,?,?,?,?)",
+                (ip, 1, note, now, now),
+            )
+
+
+def list_discovered():
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM discovered_hosts ORDER BY ip")]
