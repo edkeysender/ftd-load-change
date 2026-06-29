@@ -551,10 +551,18 @@ function toggleLoadPicker() {
   if (sel.style.display !== 'none') sel.focus();
 }
 function startNewDevLoad() {
-  selectedApps = new Map(); renderSelected();
+  // Fresh load: keep the PC list + folders, but drop every PC's apps so each PC
+  // starts EMPTY. Switching PCs then shows a blank selection to build up (no
+  // "unknown load" pulled from the current manifest), and Save covers all PCs.
+  Object.keys(manifestObj.pcs || {}).forEach(ip => {
+    manifestObj.pcs[ip] = Object.assign({}, manifestObj.pcs[ip], { apps: {} });
+  });
+  selectedApps = new Map();
+  if (browsePc) loadSelectedFromManifest(); else renderSelected();
   $('newload-label').textContent = '— new load: ' + (nextDevTag || 'dev-?');
-  setConfigStatus('New dev load — pick folders from the tree, then Save', '');
+  setConfigStatus('New dev load — pick folders per PC (switch PCs to add more), then Save', '');
   showConfigTab('browser');
+  reloadTree();
 }
 function saveCurrentManifest() {
   return ($('tab-yaml').style.display !== 'none') ? saveManifest() : saveBrowserManifest();
@@ -629,7 +637,12 @@ async function renderBrowserFromManifest() {
   browsePc = sel.value;
   if (browsePc) { loadSelectedFromManifest(); reloadTree(); }
 }
-function browsePcChanged() { browsePc = $('browsePc').value; loadSelectedFromManifest(); reloadTree(); }
+function browsePcChanged() {
+  flushSelection();                 // persist picks for the PC we're leaving
+  browsePc = $('browsePc').value;
+  loadSelectedFromManifest();       // load picks for the PC we're entering
+  reloadTree();
+}
 
 function loadSelectedFromManifest() {
   selectedApps = new Map();
@@ -725,7 +738,9 @@ function renderSelected() {
     box.appendChild(card);
   }
 }
-async function saveBrowserManifest() {
+// Persist the CURRENT PC's tree selection into manifestObj (in memory), so picks
+// survive a PC switch and Save can cover every PC — not just the one on screen.
+function flushSelection() {
   if (!browsePc) return;
   const pc = manifestObj.pcs[browsePc] || {};
   const folder = pc.folder || ('pc-' + browsePc.replace(/\./g, '-'));
@@ -744,10 +759,14 @@ async function saveBrowserManifest() {
       apps[appKey(base)] = { live: [path], repo: folder + '/' + base };  // new = sync-only
     }
   }
-  manifestObj.pcs[browsePc] = Object.assign({}, pc, { apps });
+  manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps });
+}
+async function saveBrowserManifest() {
+  flushSelection();  // fold in the PC currently on screen
+  const nPcs = Object.values(manifestObj.pcs || {}).filter(p => Object.keys(p.apps || {}).length).length;
   try {
-    await api('PUT', '/manifest/json', manifestObj);
-    setSaveStatus('saved ✓ — ' + Object.keys(apps).length + ' folders synced on ' + browsePc, 'ok');
+    await api('PUT', '/manifest/json', manifestObj);   // whole manifest = all PCs in this load
+    setSaveStatus('saved ✓ — ' + nPcs + ' PC(s) in this load', 'ok');
     refresh();
   } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
 }
