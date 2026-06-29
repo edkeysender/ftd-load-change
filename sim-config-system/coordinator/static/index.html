@@ -145,11 +145,10 @@
       <button class="ghost" id="tabbtn-yaml" onclick="showConfigTab('yaml')">YAML</button>
     </h2>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <span class="hint" style="margin:0">Load from:</span>
-      <select id="loadVersionRef"></select>
-      <button class="ghost" onclick="loadManifestFromVersion()">Load</button>
+      <button class="ghost" onclick="toggleLoadPicker()">Load</button>
+      <select id="loadVersionRef" style="display:none" onchange="loadManifestFromVersion()"></select>
       <button onclick="startNewDevLoad()">NEW</button>
-      <span class="hint" style="margin:0">NEW = start a fresh dev load (next version); pick folders from the tree.</span>
+      <span class="hint" style="margin:0">Load = open an existing load · NEW = start a fresh dev load (pick from tree).</span>
     </div>
     <div class="row-actions" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:8px">
       <button onclick="saveCurrentManifest()">Save</button>
@@ -522,6 +521,7 @@ async function loadManifestFromVersion() {
     manifestObj = d.manifest || { pcs: {} };
     $('manifest').value = d.yaml || '';     // YAML tab
     await renderBrowserFromManifest();        // File browser tab reflects it too
+    $('loadVersionRef').style.display = 'none';  // collapse the picker after loading
     setManifestStatus('loaded from ' + ref + ' — edit + Save commits to dev', 'ok');
     toast('Loaded manifest from ' + ref);
   } catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); toast('load failed: ' + e.message, true); }
@@ -545,6 +545,11 @@ function showMainTab(t) {
 }
 const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
 
+function toggleLoadPicker() {
+  const sel = $('loadVersionRef');
+  sel.style.display = sel.style.display === 'none' ? '' : 'none';
+  if (sel.style.display !== 'none') sel.focus();
+}
 function startNewDevLoad() {
   selectedApps = new Map(); renderSelected();
   $('newload-label').textContent = '— new load: ' + (nextDevTag || 'dev-?');
