@@ -120,7 +120,7 @@
     </h2>
 
     <div id="tab-browser">
-      <div class="hint">Pick folders to version per PC — no path typing. Check a folder = make it an app; set its run/delay/version on the right. Save writes the manifest. (Needs the PC's agent online.)</div>
+      <div class="hint">Pick folders to <b>sync</b> per PC — check a folder to version it. No paths, no launch config (use the YAML tab for run/delay). Existing launch apps are preserved on save. (Needs the PC's agent online.)</div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <label style="font-size:13px">PC: <select id="browsePc" onchange="browsePcChanged()"></select></label>
         <button class="ghost" onclick="reloadTree()">⟳ Tree</button>
@@ -383,7 +383,7 @@ function loadSelectedFromManifest() {
   const apps = (manifestObj.pcs[browsePc] || {}).apps || {};
   for (const [key, a] of Object.entries(apps)) {
     const p = (a.live && a.live[0]) || '';
-    if (p) selectedApps.set(p, { name: key, run: a.run || '', start_delay: a.start_delay || 0, version: a.version || '' });
+    if (p) selectedApps.set(p, { name: key, launch: !!a.run });
   }
   renderSelected();
 }
@@ -448,27 +448,22 @@ function makeNode(entry, depth) {
 }
 function toggleSelect(entry, checked) {
   if (checked) {
-    if (!selectedApps.has(entry.path))
-      selectedApps.set(entry.path, { name: appKey(entry.name), run: '', start_delay: 0, version: '' });
+    if (!selectedApps.has(entry.path)) selectedApps.set(entry.path, { name: appKey(entry.name) });
   } else selectedApps.delete(entry.path);
   renderSelected();
 }
 function renderSelected() {
   const box = $('selected');
-  if (!selectedApps.size) { box.innerHTML = '<div class="muted" style="font-size:13px">Check folders in the tree to add apps.</div>'; return; }
+  if (!selectedApps.size) { box.innerHTML = '<div class="muted" style="font-size:13px">Check folders in the tree to sync them.</div>'; return; }
   box.innerHTML = '';
   for (const [path, m] of selectedApps) {
     const card = document.createElement('div');
-    card.style.cssText = 'border:1px solid #ece9e0;border-radius:8px;padding:8px;margin-bottom:8px';
+    card.style.cssText = 'border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px';
     card.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center">' +
-        '<b>' + esc(m.name) + '</b><button class="ghost" data-rm="1">remove</button></div>' +
-      '<div class="muted" style="font-size:11px;margin:2px 0 6px">live: ' + esc(path) + '</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;align-items:center">' +
-        '<label>run <input data-f="run" value="' + esc(m.run) + '" placeholder="…/app.exe" style="width:170px"></label>' +
-        '<label>delay <input data-f="start_delay" type="number" value="' + (m.start_delay || 0) + '" style="width:54px"></label>' +
-        '<label>version <input data-f="version" value="' + esc(m.version) + '" style="width:74px"></label></div>';
-    card.querySelectorAll('input[data-f]').forEach(inp => { inp.onchange = () => { m[inp.dataset.f] = inp.value; }; });
+      '<div style="min-width:0">' +
+        '<b>' + esc(m.name) + '</b>' + (m.launch ? ' <span class="muted" style="font-size:10px">(launch app — kept)</span>' : '') +
+        '<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">' + esc(path) + '</div></div>' +
+      '<button class="ghost" data-rm="1">remove</button>';
     card.querySelector('[data-rm]').onclick = () => {
       selectedApps.delete(path); renderSelected();
       const cb = document.querySelector('#tree input[data-path="' + path.replace(/"/g, '\\"') + '"]');
@@ -479,24 +474,27 @@ function renderSelected() {
 }
 async function saveBrowserManifest() {
   if (!browsePc) return;
-  const folder = (manifestObj.pcs[browsePc] || {}).folder || browsePc;
-  const apps = {};
-  for (const [path, m] of selectedApps) {
-    const base = path.split('/').filter(Boolean).pop() || 'app';
-    const key = m.name || appKey(base);
-    apps[key] = {
-      version: m.version || '—',
-      live: [path],
-      repo: folder + '/' + base,
-      run: m.run || '',
-      start_delay: Number(m.start_delay) || 0,
-      restart_on_change: true,
-    };
+  const pc = manifestObj.pcs[browsePc] || {};
+  const folder = pc.folder || browsePc;
+  // index existing apps by their live path so we preserve launch config (run/delay).
+  const byLive = {};
+  for (const [k, a] of Object.entries(pc.apps || {})) {
+    const p = (a.live && a.live[0]) || '';
+    if (p) byLive[p] = { key: k, spec: a };
   }
-  manifestObj.pcs[browsePc] = Object.assign({}, manifestObj.pcs[browsePc], { apps });
+  const apps = {};
+  for (const [path] of selectedApps) {
+    const base = path.split('/').filter(Boolean).pop() || 'app';
+    if (byLive[path]) {
+      apps[byLive[path].key] = byLive[path].spec;        // keep existing (incl. run/delay)
+    } else {
+      apps[appKey(base)] = { live: [path], repo: folder + '/' + base };  // new = sync-only
+    }
+  }
+  manifestObj.pcs[browsePc] = Object.assign({}, pc, { apps });
   try {
     await api('PUT', '/manifest/json', manifestObj);
-    setSaveStatus('saved ✓ — ' + Object.keys(apps).length + ' apps for ' + browsePc, 'ok');
+    setSaveStatus('saved ✓ — ' + Object.keys(apps).length + ' folders synced on ' + browsePc, 'ok');
     refresh();
   } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
 }
