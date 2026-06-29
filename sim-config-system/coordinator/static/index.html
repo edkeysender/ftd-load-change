@@ -304,8 +304,16 @@ const rollback = t => confirm('Roll back training-live to ' + t + ' and redeploy
 const startDev = () => act(() => api('POST', '/dev/start', { user: requireUser() }), 'Dev session started');
 const endDev   = () => act(() => api('POST', '/dev/end', {}), 'Dev session ended');
 const capture  = pc => act(() => api('POST', '/dev/capture', { pc }), 'Capturing ' + pc + '…');
-const importPc = pc => act(() => api('POST', '/import/' + pc, {}), 'Import queued for ' + pc);
-const sizeReport = pc => act(() => api('POST', '/import/' + pc + '/size-report', {}), 'Size report queued for ' + pc);
+function bootstrapAction(pc, path, label) {
+  api('POST', path, {})
+    .then(() => {
+      toast(label + ' running on ' + pc + ' — read-only; result appears below in a few seconds');
+      [1500, 3000, 5000, 8000, 12000].forEach(ms => setTimeout(refresh, ms));
+    })
+    .catch(e => toast(e.message, true));
+}
+const importPc = pc => bootstrapAction(pc, '/import/' + pc, 'Import');
+const sizeReport = pc => bootstrapAction(pc, '/import/' + pc + '/size-report', 'Size report');
 const addHost   = ip => act(() => api('POST', '/discover/add', { ip }), ip + ' added to list');
 const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip + ' removed');
 const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Updating agent ' + ip + ' — it will download + relaunch');
