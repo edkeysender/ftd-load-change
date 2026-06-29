@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"log"
 	"os"
 )
@@ -18,13 +19,28 @@ import (
 // its working clone (idempotent: re-import replaces the folder's tree).
 func (a *Agent) doImport(c Command) {
 	log.Printf("[import] folder=%s apps=%d (read-only)", c.Folder, len(c.Apps))
-	files := map[string][]byte{}
+	const budget = 48 << 20 // upload in ~48MB batches so huge folders don't OOM
+
+	batch := map[string][]byte{}
+	var batchBytes, totalBytes int64
+	var totalFiles, batchIdx int
 	var missing []string
-	var totalBytes int64
+	failed := false
+
+	upload := func(final bool) bool {
+		if err := a.api.UploadImportBundle(a.cfg.PCIP, c.Folder, batch, missing, batchIdx, final); err != nil {
+			a.fail(err)
+			failed = true
+			return false
+		}
+		batch = map[string][]byte{} // free the batch's memory
+		batchBytes = 0
+		batchIdx++
+		return true
+	}
 
 	for name, app := range c.Apps {
 		if app.Repo == "" || len(app.Live) == 0 {
-			log.Printf("[import] skip %s (no repo/live to version)", name)
 			continue
 		}
 		miss, err := walkApp(app.Live, app.Exclude, func(rel, full string, size int64) error {
@@ -33,10 +49,18 @@ func (a *Agent) doImport(c Command) {
 				log.Printf("[import] WARN unreadable %s: %v", full, rerr)
 				return nil // skip, don't abort the whole import
 			}
-			files[app.Repo+"/"+rel] = data
+			batch[app.Repo+"/"+rel] = data
+			batchBytes += int64(len(data))
 			totalBytes += size
+			totalFiles++
+			if batchBytes >= budget && !upload(false) {
+				return fmt.Errorf("batch upload failed")
+			}
 			return nil
 		})
+		if failed {
+			return
+		}
 		if err != nil {
 			a.fail(err)
 			return
@@ -47,12 +71,10 @@ func (a *Agent) doImport(c Command) {
 		}
 	}
 
-	log.Printf("[import] bundled %d files, %d bytes; uploading", len(files), totalBytes)
-	if err := a.api.UploadImportBundle(a.cfg.PCIP, c.Folder, missing, files); err != nil {
-		a.fail(err)
-		return
+	log.Printf("[import] %d files, %d bytes in %d batch(es); finalizing", totalFiles, totalBytes, batchIdx+1)
+	if upload(true) {
+		log.Printf("[import] done folder=%s", c.Folder)
 	}
-	log.Printf("[import] done folder=%s", c.Folder)
 }
 
 // doSizeReport (Phase 1): du -sh per app folder so the operator sees GB before

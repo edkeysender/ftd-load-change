@@ -390,16 +390,18 @@ def enforce(pc_ip: str, authorization: str | None = Header(None)):
 
 @app.post("/agents/{pc_ip}/import-result")
 def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
-    """Phase 1 bootstrap upload. Stage the PC's tree into the working clone
-    (idempotent: the folder is replaced). No commit happens until /seal-baseline."""
+    """Phase 1 bootstrap upload, streamed in batches to bound memory. batch_index
+    0 clears the folder; final=true records the import. No commit until /seal."""
     _auth(authorization)
     folder = payload["folder"]
     files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
-    git_ops.stage_import_bundle(folder, files)
-    db.record_import(pc_ip, folder, len(files),
-                     sum(len(b) for b in files.values()),
-                     payload.get("missing", []))
-    return {"staged_files": len(files), "folder": folder}
+    if payload.get("batch_index", 0) == 0:
+        git_ops.clear_folder(folder)
+    git_ops.write_files(files)
+    if payload.get("final", True):
+        n, b = git_ops.folder_stats(folder)
+        db.record_import(pc_ip, folder, n, b, payload.get("missing", []))
+    return {"staged_files": len(files), "batch": payload.get("batch_index", 0)}
 
 
 @app.post("/agents/{pc_ip}/size-report-result")

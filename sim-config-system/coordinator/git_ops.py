@@ -103,18 +103,34 @@ def _seed_root_files():
         shutil.copyfile(config.SEED_GITIGNORE, dst_ignore)
 
 
-def stage_import_bundle(folder: str, files: dict):
-    """Stage an imported PC tree into the working clone. File keys are repo paths
-    already prefixed with <folder> (e.g. "pc-12-display/displays/CPTInboard/x").
-    Idempotent: the PC folder is cleared first, so re-import replaces it."""
+def clear_folder(folder: str):
+    """Remove a PC's folder in the working clone (start of a fresh import)."""
     with _WRITE_LOCK:
-        target_folder = config.WORK_CLONE / folder
-        if target_folder.exists():
-            shutil.rmtree(target_folder)
+        target = config.WORK_CLONE / folder
+        if target.exists():
+            shutil.rmtree(target)
+
+
+def write_files(files: dict):
+    """Write one import batch into the working clone. Keys are repo paths already
+    prefixed with <folder> (e.g. "pc-12-display/displays/CPTInboard/x")."""
+    with _WRITE_LOCK:
         for rel_path, content in files.items():
             dst = config.WORK_CLONE / rel_path
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(content)
+
+
+def folder_stats(folder: str):
+    """(file_count, byte_count) of a staged PC folder, for the bootstrap panel."""
+    base = config.WORK_CLONE / folder
+    n = b = 0
+    if base.exists():
+        for p in base.rglob("*"):
+            if p.is_file():
+                n += 1
+                b += p.stat().st_size
+    return n, b
 
 
 def commit_all(message: str, author: str):

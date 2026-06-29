@@ -139,16 +139,17 @@ func (c *Client) UploadCaptureBundle(pcIP, folder string, changed map[string][]b
 	return nil
 }
 
-// UploadImportBundle posts a PC's imported tree (Phase 1 bootstrap). Files are
-// keyed by repo-relative path under the PC folder. The coordinator stages them
-// into its working clone; nothing is committed until /seal-baseline.
-func (c *Client) UploadImportBundle(pcIP, folder string, missing []string, files map[string][]byte) error {
+// UploadImportBundle posts ONE batch of a PC's imported tree (Phase 1 bootstrap).
+// Large folders are streamed in batches to bound memory. batchIndex 0 tells the
+// coordinator to clear the folder first; final=true records the import.
+func (c *Client) UploadImportBundle(pcIP, folder string, files map[string][]byte, missing []string, batchIndex int, final bool) error {
 	enc := make(map[string]string, len(files))
 	for p, b := range files {
 		enc[p] = b64(b)
 	}
 	resp, err := c.do("POST", "/agents/"+pcIP+"/import-result", map[string]any{
 		"folder": folder, "missing": missing, "files": enc,
+		"batch_index": batchIndex, "final": final,
 	})
 	if err != nil {
 		return err
