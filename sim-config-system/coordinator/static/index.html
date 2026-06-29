@@ -305,9 +305,12 @@ function renderDevVersions(v) {
       <td>${tagCell} ${isLive ? '<span class="live-badge">TESTING</span>' : ''}</td>
       <td>${esc(x.message)}</td><td>${esc(x.author)}</td>
       <td class="muted">${ago(x.created_at)}</td>
-      <td class="row-actions">${isLive ? '<span class="muted">on sim</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}</td>
+      <td class="row-actions">
+        ${isLive ? '<span class="muted">on sim</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}
+        <button class="warn" onclick="promoteDev('${esc(x.tag)}')">Promote to Master</button>
+      </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">No dev test versions — capture changes, then "Snapshot dev".</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">No dev test versions — create one in Bootstrap.</td></tr>';
 }
 
 function populateCompare(vers, devvers) {
@@ -400,6 +403,13 @@ function snapshotDev() {
   const msg = prompt('What does this dev test version contain?');
   if (!msg) return;
   act(() => api('POST', '/dev/snapshot', { message: msg, author }), 'Snapshotting dev → test version…');
+}
+function promoteDev(tag) {
+  const author = requireUser();
+  if (!confirm('Promote ' + tag + ' to a new customer training version (and make it live on the sim)?')) return;
+  const msg = prompt('Training version message (what this build delivers):', tag);
+  if (!msg) return;
+  act(() => api('POST', '/promote', { message: msg, author, from_ref: tag }), 'Promoting ' + tag + ' → new training version…');
 }
 function bootstrapAction(pc, path, label) {
   api('POST', path, {})

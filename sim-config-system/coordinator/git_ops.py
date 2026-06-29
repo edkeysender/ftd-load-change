@@ -202,11 +202,16 @@ def capture_commit(deleted: list, message: str, author: str):
         return commit_all(message, author)
 
 
-def promote(message: str, author: str, new_tag: str):
-    """Squash-merge dev into master, tag the new version, move training-live."""
+def promote(message: str, author: str, new_tag: str, from_ref: str | None = None):
+    """Squash-merge a dev build into master, tag the new version, move training-live.
+
+    `from_ref` is the source to promote (a specific dev-N test tag); defaults to the
+    dev branch tip. Promoting a tag freezes exactly that tested build as the new
+    customer training version, even if dev has moved on since."""
+    src = from_ref or config.DEV_BRANCH
     with _WRITE_LOCK:
         _git("checkout", config.MASTER)
-        _git("merge", "--squash", config.DEV_BRANCH)
+        _git("merge", "--squash", src)
         sha = commit_all(f"{new_tag}: {message}", author)
         _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
         _git("branch", "-f", config.TRAINING_LIVE, new_tag)

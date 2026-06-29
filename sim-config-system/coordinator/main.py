@@ -386,6 +386,7 @@ def diff(base: str, head: str = config.DEV_BRANCH):
 class PromoteReq(BaseModel):
     message: str
     author: str
+    from_ref: str | None = None  # a specific dev-N build to promote (default: dev tip)
 
 
 @app.post("/promote")
@@ -393,7 +394,7 @@ def promote(req: PromoteReq):
     if db.lock_holder() and db.lock_holder() != req.author:
         raise HTTPException(409, f"dev session held by {db.lock_holder()}")
     tag = db.next_version_tag()
-    sha = git_ops.promote(req.message, req.author, tag)
+    sha = git_ops.promote(req.message, req.author, tag, req.from_ref)
     db.record_version(tag, req.message, req.author, sha or "")
     _enqueue_deploy_all()
     return {"tag": tag, "sha": sha}
