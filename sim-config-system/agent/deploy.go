@@ -53,7 +53,9 @@ func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 	if out, err := gitCmd(cfg, "sparse-checkout", "set", folder); err != nil {
 		return fmt.Errorf("sparse-checkout set: %v: %s", err, out)
 	}
-	if out, err := gitCmd(cfg, "fetch", "--prune", "--tags", "origin"); err != nil {
+	// --force so a recreated tag (e.g. v1.0 after a reset/re-seal) doesn't get
+	// rejected as "would clobber existing tag" and abort the whole deploy.
+	if out, err := gitCmd(cfg, "fetch", "--prune", "--tags", "--force", "origin"); err != nil {
 		return fmt.Errorf("fetch: %v: %s", err, out)
 	}
 	// Resolve to the target object: a branch (training-live/dev) tracks its remote
