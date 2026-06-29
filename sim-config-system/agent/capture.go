@@ -45,16 +45,14 @@ func MirrorToWorktree(cfg AgentConfig, apps map[string]AppSpec) error {
 	return nil
 }
 
-// ChangedFilesVsDev lists what differs from dev (HEAD) within this PC's folder.
-// Returns changed/added files (with bytes, keyed by repo-root-relative path) and
-// the paths that were deleted. Uses -z so paths with spaces are safe.
-func ChangedFilesVsDev(cfg AgentConfig, folder string) (map[string][]byte, []string, error) {
-	out, err := gitCmd(cfg, "status", "--porcelain=v1", "-z", "--no-renames", "--", folder)
-	if err != nil {
-		return nil, nil, fmt.Errorf("git status: %v: %s", err, out)
+// ChangedFilesVsDev lists what differs from dev (HEAD) within this PC's folder:
+// repo-root-relative paths of changed/added files (bytes read later, in batches,
+// to bound memory) and the paths that were deleted. -z so spaces are safe.
+func ChangedFilesVsDev(cfg AgentConfig, folder string) (changed []string, deleted []string, err error) {
+	out, e := gitCmd(cfg, "status", "--porcelain=v1", "-z", "--no-renames", "--", folder)
+	if e != nil {
+		return nil, nil, fmt.Errorf("git status: %v: %s", e, out)
 	}
-	changed := map[string][]byte{}
-	var deleted []string
 	for _, rec := range strings.Split(out, "\x00") {
 		if len(rec) < 4 {
 			continue
@@ -65,15 +63,9 @@ func ChangedFilesVsDev(cfg AgentConfig, folder string) (map[string][]byte, []str
 		}
 		if strings.Contains(status, "D") {
 			deleted = append(deleted, filepath.ToSlash(path))
-			continue
+		} else {
+			changed = append(changed, filepath.ToSlash(path))
 		}
-		full := filepath.Join(cfg.RepoPath, filepath.FromSlash(path))
-		data, rerr := os.ReadFile(full)
-		if rerr != nil {
-			log.Printf("[capture] WARN unreadable %s: %v", full, rerr)
-			continue
-		}
-		changed[filepath.ToSlash(path)] = data
 	}
 	return changed, deleted, nil
 }

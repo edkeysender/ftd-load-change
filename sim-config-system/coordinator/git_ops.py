@@ -169,16 +169,25 @@ def seal_baseline(message: str, author: str):
         return sha
 
 
-def apply_capture_bundle(files: dict, deleted: list, message: str, author: str):
-    """Apply a dev-capture diff onto the dev branch and commit. File keys are
-    repo-root-relative (e.g. "pc-12-display/displays/CPTInboard/x"); `deleted` are
-    paths to remove. Serialized with all other git writes."""
+def capture_begin():
+    """Switch the working clone to dev before a (possibly batched) capture."""
     with _WRITE_LOCK:
         _git("checkout", config.DEV_BRANCH)
+
+
+def capture_write(files: dict):
+    """Write one capture batch onto the dev working tree. Keys are repo-root-
+    relative (e.g. "pc-12-display/displays/CPTInboard/x")."""
+    with _WRITE_LOCK:
         for rel_path, content in files.items():
             target = config.WORK_CLONE / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
+
+
+def capture_commit(deleted: list, message: str, author: str):
+    """Apply deletions and commit the capture to dev (serialized by the lock)."""
+    with _WRITE_LOCK:
         for rel_path in deleted or []:
             p = config.WORK_CLONE / rel_path
             if p.exists():

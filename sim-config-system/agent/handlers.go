@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 // ============================ command handlers ==========================
@@ -180,9 +181,51 @@ func (a *Agent) doCapture(c Command) {
 		a.fail(err)
 		return
 	}
-	log.Printf("[capture] %d changed, %d deleted; uploading", len(changed), len(deleted))
-	if err := a.api.UploadCaptureBundle(a.cfg.PCIP, c.Folder, changed, deleted); err != nil {
-		a.fail(err)
+
+	// Size pass for the progress bar.
+	var totalExpected int64
+	for _, p := range changed {
+		if fi, e := os.Stat(filepath.Join(a.cfg.RepoPath, filepath.FromSlash(p))); e == nil {
+			totalExpected += fi.Size()
+		}
+	}
+	log.Printf("[capture] %d changed, %d deleted, %d bytes; uploading", len(changed), len(deleted), totalExpected)
+
+	// Upload changed files in ~48MB batches so big captures don't OOM. The final
+	// batch carries the deletions; batch 0 tells the coordinator to checkout dev.
+	const budget = 48 << 20
+	batch := map[string][]byte{}
+	var batchBytes int64
+	batchIdx := 0
+	failed := false
+	upload := func(final bool) bool {
+		var del []string
+		if final {
+			del = deleted
+		}
+		if err := a.api.UploadCaptureBundle(a.cfg.PCIP, c.Folder, batch, del, batchIdx, final, totalExpected); err != nil {
+			a.fail(err)
+			failed = true
+			return false
+		}
+		batch = map[string][]byte{}
+		batchBytes = 0
+		batchIdx++
+		return true
+	}
+	for _, p := range changed {
+		data, rerr := os.ReadFile(filepath.Join(a.cfg.RepoPath, filepath.FromSlash(p)))
+		if rerr != nil {
+			log.Printf("[capture] WARN unreadable %s: %v", p, rerr)
+			continue
+		}
+		batch[p] = data
+		batchBytes += int64(len(data))
+		if batchBytes >= budget && !upload(false) {
+			return
+		}
+	}
+	if failed || !upload(true) {
 		return
 	}
 	StartApps(c.Apps) // resume the dev session (apps were stopped above)

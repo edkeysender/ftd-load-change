@@ -16,8 +16,9 @@ from . import config, db, discovery, git_ops, manifest
 # In-flight filesystem-browse requests: req_id -> {"event": Event, "result": dict}
 _browse_requests: dict = {}
 
-# Live import progress per PC: pc_ip -> {total_bytes, received_bytes, received_files, done}
+# Live import/capture progress per PC: pc_ip -> {total_bytes, received_bytes, done}
 _import_progress: dict = {}
+_capture_progress: dict = {}
 
 app = FastAPI(title="Sim Config Coordinator")
 
@@ -141,7 +142,8 @@ def _enqueue_deploy_all():
 # ===================== UI / operator endpoints ==========================
 @app.get("/pcs")
 def pcs():
-    return {"agents": db.list_agents(), "dev_lock": db.lock_holder()}
+    return {"agents": db.list_agents(), "dev_lock": db.lock_holder(),
+            "capture_progress": _capture_progress}
 
 
 @app.get("/versions")
@@ -477,16 +479,27 @@ def browse_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
 
 @app.post("/agents/{pc_ip}/capture-result")
 def capture_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
-    """Apply a dev-capture bundle to the dev branch, attributed to the lock holder.
-    Serialized with all other git writes so multi-PC captures don't race."""
+    """Apply a dev-capture diff to dev, streamed in batches. batch 0 checks out
+    dev; the final batch applies deletions + commits (attributed to the lock
+    holder). Serialized with other git writes so multi-PC captures don't race."""
     _auth(authorization)
     files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
-    deleted = payload.get("deleted", [])
-    author = db.lock_holder() or "dev"
     folder = payload.get("folder", "")
-    message = payload.get("message") or f"dev capture from {pc_ip} ({folder})"
-    sha = git_ops.apply_capture_bundle(files, deleted, message, author)
-    return {"committed": sha, "changed": len(files), "deleted": len(deleted)}
+    if payload.get("batch_index", 0) == 0:
+        git_ops.capture_begin()
+        _capture_progress[pc_ip] = {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
+                                    "received_bytes": 0, "done": False}
+    git_ops.capture_write(files)
+    prog = _capture_progress.setdefault(pc_ip, {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
+                                                "received_bytes": 0, "done": False})
+    prog["received_bytes"] += sum(len(b) for b in files.values())
+    result = {"batch": payload.get("batch_index", 0)}
+    if payload.get("final", True):
+        author = db.lock_holder() or "dev"
+        message = payload.get("message") or f"dev capture from {pc_ip} ({folder})"
+        result["committed"] = git_ops.capture_commit(payload.get("deleted") or [], message, author)
+        prog["done"] = True
+    return result
 
 
 @app.post("/agents/{pc_ip}/deploy-result")

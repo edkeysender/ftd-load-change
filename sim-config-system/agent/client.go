@@ -121,13 +121,17 @@ func (c *Client) fetchCommand(path string) (*Command, error) {
 // UploadCaptureBundle posts the dev-capture diff (changed files + deletions). The
 // agent does not set the author/message — the coordinator attributes the commit
 // to the dev-session lock holder.
-func (c *Client) UploadCaptureBundle(pcIP, folder string, changed map[string][]byte, deleted []string) error {
+func (c *Client) UploadCaptureBundle(pcIP, folder string, changed map[string][]byte, deleted []string, batchIndex int, final bool, totalBytes int64) error {
 	enc := make(map[string]string, len(changed))
 	for p, b := range changed {
 		enc[p] = b64(b)
 	}
+	if deleted == nil {
+		deleted = []string{} // send [] not null so the coordinator never len(None)s
+	}
 	resp, err := c.do("POST", "/agents/"+pcIP+"/capture-result", map[string]any{
 		"folder": folder, "files": enc, "deleted": deleted,
+		"batch_index": batchIndex, "final": final, "total_bytes": totalBytes,
 	})
 	if err != nil {
 		return err
