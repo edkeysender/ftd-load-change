@@ -22,6 +22,8 @@ services:
       - FORGEJO__database__DB_TYPE=sqlite3
       - FORGEJO__security__INSTALL_LOCK=true
       - FORGEJO__service__DISABLE_REGISTRATION=true
+      - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false   # anonymous viewing of public repos
+      - FORGEJO__security__LOGIN_REMEMBER_DAYS=3650    # "remember me" cookie lasts ~10y
       - FORGEJO__server__DOMAIN=${PI_HOST:-localhost}
       - FORGEJO__server__HTTP_PORT=3000
       - FORGEJO__server__ROOT_URL=http://${PI_HOST:-localhost}:3000/

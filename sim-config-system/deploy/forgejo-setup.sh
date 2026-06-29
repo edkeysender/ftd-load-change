@@ -63,6 +63,8 @@ docker run -d --name "$CT" --restart unless-stopped \
   -e FORGEJO__database__DB_TYPE=sqlite3 \
   -e FORGEJO__security__INSTALL_LOCK=true \
   -e FORGEJO__service__DISABLE_REGISTRATION=true \
+  -e FORGEJO__service__REQUIRE_SIGNIN_VIEW=false \
+  -e FORGEJO__security__LOGIN_REMEMBER_DAYS=3650 \
   -e FORGEJO__server__DOMAIN="$PI_HOST" \
   -e FORGEJO__server__HTTP_PORT=3000 \
   -e FORGEJO__server__ROOT_URL="http://$PI_HOST:3000/" \
