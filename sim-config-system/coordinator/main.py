@@ -4,11 +4,17 @@ The coordinator is the single git writer and the orchestration brain. Agents are
 read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
+import threading
+import uuid
+import yaml
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header, Body
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from . import config, db, discovery, git_ops, manifest
+
+# In-flight filesystem-browse requests: req_id -> {"event": Event, "result": dict}
+_browse_requests: dict = {}
 
 app = FastAPI(title="Sim Config Coordinator")
 
@@ -67,6 +73,32 @@ def manifest_raw_save(req: ManifestRaw):
             raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
     config.MANIFEST_PATH.write_text(req.yaml)
     return {"ok": True, "pcs": list(data["pcs"].keys())}
+
+
+def _validate_manifest(data):
+    if not isinstance(data, dict) or not isinstance(data.get("pcs"), dict):
+        raise HTTPException(400, "manifest must be a mapping with a 'pcs' mapping")
+    for ip, spec in data["pcs"].items():
+        if not isinstance(spec, dict) or "folder" not in spec:
+            raise HTTPException(400, f"pc {ip}: missing 'folder'")
+        if not isinstance(spec.get("apps") or {}, dict):
+            raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
+
+
+@app.get("/manifest/json")
+def manifest_json():
+    """Parsed manifest for the config-panel builder."""
+    return {"manifest": manifest.load_manifest()}
+
+
+@app.put("/manifest/json")
+def manifest_json_save(body: dict = Body(...)):
+    """Persist a manifest built by the UI (file browser). Dumped to YAML;
+    comments in the file are not preserved — use the raw editor to keep them."""
+    _validate_manifest(body)
+    config.MANIFEST_PATH.write_text(
+        yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True))
+    return {"ok": True, "pcs": list(body["pcs"].keys())}
 
 
 @app.on_event("startup")
@@ -302,8 +334,7 @@ def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None
 @app.get("/agents/{pc_ip}/commands")
 def commands(pc_ip: str, authorization: str | None = Header(None)):
     _auth(authorization)
-    # TODO: convert to true long-poll (block up to ~25s waiting for a command).
-    return {"command": manifest.pop(pc_ip)}
+    return {"command": manifest.wait_command(pc_ip)}  # long-poll up to ~25s
 
 
 @app.get("/agents/{pc_ip}/enforce")
@@ -338,6 +369,35 @@ def size_report_result(pc_ip: str, payload: dict = Body(...), authorization: str
     """Per-app byte sizes for the bootstrap panel (review before sealing)."""
     _auth(authorization)
     db.record_size_report(pc_ip, payload.get("folder", ""), payload.get("sizes", {}))
+    return {"ok": True}
+
+
+# ---- filesystem browser (config panel) ----------------------------------
+@app.get("/agents/{pc_ip}/browse")
+def browse(pc_ip: str, path: str = ""):
+    """Operator endpoint: ask the agent to list `path` (or drives if empty) and
+    block until it answers. Powers the config-panel file tree."""
+    req_id = uuid.uuid4().hex
+    ev = threading.Event()
+    _browse_requests[req_id] = {"event": ev, "result": None}
+    try:
+        manifest.enqueue(pc_ip, {"type": "browse", "req_id": req_id, "path": path})
+        if not ev.wait(12) or _browse_requests[req_id]["result"] is None:
+            raise HTTPException(504, "agent did not respond (offline or busy)")
+        return _browse_requests[req_id]["result"]
+    finally:
+        _browse_requests.pop(req_id, None)
+
+
+@app.post("/agents/{pc_ip}/browse-result")
+def browse_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    _auth(authorization)
+    req = _browse_requests.get(payload.get("req_id"))
+    if req is not None:
+        req["result"] = {"path": payload.get("path", ""),
+                         "entries": payload.get("entries", []),
+                         "error": payload.get("error") or None}
+        req["event"].set()
     return {"ok": True}
 
 

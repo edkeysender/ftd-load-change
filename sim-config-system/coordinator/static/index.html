@@ -114,14 +114,42 @@
 
   <section>
     <h2>Configuration (manifest)
-      <button class="ghost" style="margin-left:auto" onclick="loadManifest()">Reload</button>
+      <span style="margin-left:auto"></span>
+      <button class="ghost" id="tabbtn-browser" onclick="showConfigTab('browser')">File browser</button>
+      <button class="ghost" id="tabbtn-yaml" onclick="showConfigTab('yaml')">YAML</button>
     </h2>
-    <div class="hint">Global sync config — which folders are versioned on each PC (live paths, repo, excludes, launch order). Edit here instead of per-machine. Takes effect immediately; baked into the next version on seal/promote.</div>
-    <textarea id="manifest" spellcheck="false"
-      style="width:100%;height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;resize:vertical;"></textarea>
-    <div class="row-actions" style="margin-top:10px;align-items:center">
-      <button onclick="saveManifest()">Save configuration</button>
-      <span id="manifest-status" class="hint" style="margin:0"></span>
+
+    <div id="tab-browser">
+      <div class="hint">Pick folders to version per PC — no path typing. Check a folder = make it an app; set its run/delay/version on the right. Save writes the manifest. (Needs the PC's agent online.)</div>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <label style="font-size:13px">PC: <select id="browsePc" onchange="browsePcChanged()"></select></label>
+        <button class="ghost" onclick="reloadTree()">⟳ Tree</button>
+        <span id="browse-status" class="hint" style="margin:0"></span>
+      </div>
+      <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1 1 320px;min-width:0;border:1px solid #d3d1c7;border-radius:8px;padding:8px;max-height:430px;overflow:auto;font-size:13px">
+          <div id="tree"></div>
+        </div>
+        <div style="flex:1 1 320px;min-width:0">
+          <div class="hint" style="margin-top:0">Will be versioned on this PC</div>
+          <div id="selected"></div>
+          <div class="row-actions" style="margin-top:12px;align-items:center">
+            <button onclick="saveBrowserManifest()">Save to manifest</button>
+            <span id="browser-save-status" class="hint" style="margin:0"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-yaml" style="display:none">
+      <div class="hint">Raw manifest (expert mode) — full control incl. excludes, multi-path apps, comments.
+        <button class="ghost" onclick="loadManifest()">Reload</button></div>
+      <textarea id="manifest" spellcheck="false"
+        style="width:100%;height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;resize:vertical;"></textarea>
+      <div class="row-actions" style="margin-top:10px;align-items:center">
+        <button onclick="saveManifest()">Save configuration</button>
+        <span id="manifest-status" class="hint" style="margin:0"></span>
+      </div>
     </div>
   </section>
 
@@ -167,6 +195,9 @@ const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&am
 
 let MANIFEST = [];   // [{ip, folder, role, apps}]
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
+let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
+let browsePc = '';               // PC selected in the file browser
+let selectedApps = new Map();    // live-path -> {name, run, start_delay, version}
 
 const safe = async p => { try { return await p; } catch (e) { return null; } };
 
@@ -311,10 +342,165 @@ async function saveManifest() {
   } catch (e) { setManifestStatus('rejected: ' + e.message, 'bad'); }
 }
 
+// ---- configuration: file browser ----
+function showConfigTab(t) {
+  $('tab-browser').style.display = t === 'browser' ? '' : 'none';
+  $('tab-yaml').style.display = t === 'yaml' ? '' : 'none';
+  $('tabbtn-browser').style.background = t === 'browser' ? '#2c2c2a' : '#ece9e0';
+  $('tabbtn-browser').style.color = t === 'browser' ? '#fff' : '#2c2c2a';
+  $('tabbtn-yaml').style.background = t === 'yaml' ? '#2c2c2a' : '#ece9e0';
+  $('tabbtn-yaml').style.color = t === 'yaml' ? '#fff' : '#2c2c2a';
+  if (t === 'browser') loadConfig();
+  if (t === 'yaml') loadManifest();
+}
+const setBrowseStatus = (m, c) => { const e = $('browse-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
+const setSaveStatus = (m, c) => { const e = $('browser-save-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
+const appKey = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+
+async function loadConfig() {
+  try {
+    manifestObj = (await api('GET', '/manifest/json')).manifest || { pcs: {} };
+    const sel = $('browsePc'), prev = sel.value;
+    sel.innerHTML = '';
+    Object.keys(manifestObj.pcs || {}).forEach(ip => {
+      const o = document.createElement('option');
+      o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')';
+      sel.appendChild(o);
+    });
+    if (prev && manifestObj.pcs[prev]) sel.value = prev;
+    browsePc = sel.value;
+    if (browsePc) { loadSelectedFromManifest(); reloadTree(); }
+  } catch (e) { setBrowseStatus('load failed: ' + e.message, 'bad'); }
+}
+function browsePcChanged() { browsePc = $('browsePc').value; loadSelectedFromManifest(); reloadTree(); }
+
+function loadSelectedFromManifest() {
+  selectedApps = new Map();
+  const apps = (manifestObj.pcs[browsePc] || {}).apps || {};
+  for (const [key, a] of Object.entries(apps)) {
+    const p = (a.live && a.live[0]) || '';
+    if (p) selectedApps.set(p, { name: key, run: a.run || '', start_delay: a.start_delay || 0, version: a.version || '' });
+  }
+  renderSelected();
+}
+
+async function browseDir(path) {
+  return api('GET', '/agents/' + encodeURIComponent(browsePc) + '/browse?path=' + encodeURIComponent(path));
+}
+async function reloadTree() {
+  const t = $('tree'); t.innerHTML = '';
+  await loadChildren('', t, 0);
+}
+async function loadChildren(path, container, depth) {
+  setBrowseStatus('loading…');
+  try {
+    const d = await browseDir(path);
+    setBrowseStatus('');
+    if (d.error) { setBrowseStatus('error: ' + d.error, 'bad'); return; }
+    const items = d.entries || [];
+    if (!items.length) {
+      const em = document.createElement('div'); em.className = 'muted';
+      em.style.paddingLeft = (depth * 16 + 18) + 'px'; em.textContent = '(empty)';
+      container.appendChild(em); return;
+    }
+    items.forEach(e => container.appendChild(makeNode(e, depth)));
+  } catch (e) { setBrowseStatus('browse failed: ' + e.message, 'bad'); }
+}
+function makeNode(entry, depth) {
+  const wrap = document.createElement('div');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 0;white-space:nowrap';
+  row.style.paddingLeft = (depth * 16) + 'px';
+  const kids = document.createElement('div'); kids.style.display = 'none';
+  if (entry.is_dir) {
+    const tog = document.createElement('span');
+    tog.textContent = '▸'; tog.style.cssText = 'cursor:pointer;width:12px;display:inline-block;color:#777';
+    let loaded = false;
+    tog.onclick = async () => {
+      if (kids.style.display === 'none') {
+        if (!loaded) { loaded = true; await loadChildren(entry.path, kids, depth + 1); }
+        kids.style.display = ''; tog.textContent = '▾';
+      } else { kids.style.display = 'none'; tog.textContent = '▸'; }
+    };
+    row.appendChild(tog);
+    const cb = document.createElement('input'); cb.type = 'checkbox';
+    cb.checked = selectedApps.has(entry.path);
+    cb.dataset.path = entry.path;
+    cb.onchange = () => toggleSelect(entry, cb.checked);
+    row.appendChild(cb);
+  } else {
+    const sp = document.createElement('span'); sp.style.cssText = 'width:30px;display:inline-block';
+    row.appendChild(sp);
+  }
+  const nm = document.createElement('span'); nm.textContent = entry.name;
+  if (!entry.is_dir) nm.style.color = '#908e86';
+  row.appendChild(nm);
+  if (!entry.is_dir && entry.size) {
+    const sz = document.createElement('span'); sz.className = 'muted'; sz.style.fontSize = '11px';
+    sz.textContent = fmtBytes(entry.size); row.appendChild(sz);
+  }
+  wrap.appendChild(row); wrap.appendChild(kids);
+  return wrap;
+}
+function toggleSelect(entry, checked) {
+  if (checked) {
+    if (!selectedApps.has(entry.path))
+      selectedApps.set(entry.path, { name: appKey(entry.name), run: '', start_delay: 0, version: '' });
+  } else selectedApps.delete(entry.path);
+  renderSelected();
+}
+function renderSelected() {
+  const box = $('selected');
+  if (!selectedApps.size) { box.innerHTML = '<div class="muted" style="font-size:13px">Check folders in the tree to add apps.</div>'; return; }
+  box.innerHTML = '';
+  for (const [path, m] of selectedApps) {
+    const card = document.createElement('div');
+    card.style.cssText = 'border:1px solid #ece9e0;border-radius:8px;padding:8px;margin-bottom:8px';
+    card.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center">' +
+        '<b>' + esc(m.name) + '</b><button class="ghost" data-rm="1">remove</button></div>' +
+      '<div class="muted" style="font-size:11px;margin:2px 0 6px">live: ' + esc(path) + '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;align-items:center">' +
+        '<label>run <input data-f="run" value="' + esc(m.run) + '" placeholder="…/app.exe" style="width:170px"></label>' +
+        '<label>delay <input data-f="start_delay" type="number" value="' + (m.start_delay || 0) + '" style="width:54px"></label>' +
+        '<label>version <input data-f="version" value="' + esc(m.version) + '" style="width:74px"></label></div>';
+    card.querySelectorAll('input[data-f]').forEach(inp => { inp.onchange = () => { m[inp.dataset.f] = inp.value; }; });
+    card.querySelector('[data-rm]').onclick = () => {
+      selectedApps.delete(path); renderSelected();
+      const cb = document.querySelector('#tree input[data-path="' + path.replace(/"/g, '\\"') + '"]');
+      if (cb) cb.checked = false;
+    };
+    box.appendChild(card);
+  }
+}
+async function saveBrowserManifest() {
+  if (!browsePc) return;
+  const folder = (manifestObj.pcs[browsePc] || {}).folder || browsePc;
+  const apps = {};
+  for (const [path, m] of selectedApps) {
+    const base = path.split('/').filter(Boolean).pop() || 'app';
+    const key = m.name || appKey(base);
+    apps[key] = {
+      version: m.version || '—',
+      live: [path],
+      repo: folder + '/' + base,
+      run: m.run || '',
+      start_delay: Number(m.start_delay) || 0,
+      restart_on_change: true,
+    };
+  }
+  manifestObj.pcs[browsePc] = Object.assign({}, manifestObj.pcs[browsePc], { apps });
+  try {
+    await api('PUT', '/manifest/json', manifestObj);
+    setSaveStatus('saved ✓ — ' + Object.keys(apps).length + ' apps for ' + browsePc, 'ok');
+    refresh();
+  } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
+}
+
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
-loadManifest();            // load the manifest once (not on every refresh, so edits aren't clobbered)
+showConfigTab('browser');  // default to the file browser
 setInterval(refresh, 5000);
 </script>
 </body>

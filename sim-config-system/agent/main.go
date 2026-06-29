@@ -92,6 +92,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doTrack(c) // P3: switch to DEV_TRACKING on dev
 	case "capture":
 		a.doCapture(c) // P3: quiesce -> mirror live->worktree -> upload bundle
+	case "browse":
+		a.doBrowse(c) // config panel: list a dir/drives (read-only, no state change)
 	default:
 		log.Printf("unknown command: %s", c.Type)
 	}

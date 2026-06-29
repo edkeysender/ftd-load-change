@@ -36,10 +36,12 @@ const (
 
 // Command is pulled from the coordinator.
 type Command struct {
-	Type   string             `json:"type"`   // import | size_report | deploy | track | capture
+	Type   string             `json:"type"`   // import | size_report | deploy | track | capture | browse
 	Ref    string             `json:"ref"`    // for deploy/track
 	Folder string             `json:"folder"` // for import/capture
 	Apps   map[string]AppSpec `json:"apps"`   // for import + size_report (resolved specs)
+	ReqID  string             `json:"req_id"` // for browse (correlates the result)
+	Path   string             `json:"path"`   // for browse (dir to list; "" = drives)
 }
 
 // AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the

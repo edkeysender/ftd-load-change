@@ -150,6 +150,21 @@ func (a *Agent) doCapture(c Command) {
 	log.Printf("[capture] done")
 }
 
+// doBrowse (config panel): list a directory level (or drives) and post the result
+// back, correlated by ReqID. Read-only; does not change agent state.
+func (a *Agent) doBrowse(c Command) {
+	var entries []BrowseEntry
+	var errStr string
+	if c.Path == "" {
+		entries = listDrives()
+	} else if e, err := listDir(c.Path); err != nil {
+		errStr = err.Error()
+	} else {
+		entries = e
+	}
+	a.api.BrowseResult(a.cfg.PCIP, c.ReqID, c.Path, entries, errStr)
+}
+
 func (a *Agent) fail(err error) {
 	log.Printf("ERROR: %v", err)
 	a.setState(StateError)

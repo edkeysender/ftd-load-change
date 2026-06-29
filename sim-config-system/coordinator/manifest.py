@@ -4,11 +4,13 @@ Commands are pulled by agents via GET /agents/{ip}/commands (long-poll).
 For the scaffold the queue is in-memory; persist to SQLite if the coordinator
 must survive restarts mid-deploy.
 """
+import threading
 import yaml
 from collections import defaultdict, deque
 from . import config
 
-_pending = defaultdict(deque)  # pc_ip -> deque of command dicts
+_pending = defaultdict(deque)            # pc_ip -> deque of command dicts
+_events = defaultdict(threading.Event)   # pc_ip -> wakeup for the long-poll
 
 
 def load_manifest():
@@ -42,13 +44,30 @@ def resolved_apps(pc_ip: str) -> dict:
 
 def enqueue(pc_ip, command: dict):
     _pending[pc_ip].append(command)
+    _events[pc_ip].set()  # wake any long-poll waiting on this agent
 
 
 def enqueue_all(command_fn):
     """command_fn(pc_ip) -> command dict, queued for every PC in the manifest."""
     for pc_ip in load_manifest()["pcs"]:
-        _pending[pc_ip].append(command_fn(pc_ip))
+        enqueue(pc_ip, command_fn(pc_ip))
 
 
 def pop(pc_ip):
     return _pending[pc_ip].popleft() if _pending[pc_ip] else None
+
+
+def wait_command(pc_ip, timeout=25.0):
+    """Long-poll: return the next command for an agent, blocking up to `timeout`
+    seconds until one is enqueued. Returns None on timeout. Replaces the old
+    busy-poll so agents don't hammer the coordinator."""
+    ev = _events[pc_ip]
+    cmd = pop(pc_ip)
+    if cmd is not None:
+        return cmd
+    ev.clear()
+    cmd = pop(pc_ip)          # re-check after clear to avoid a lost wakeup
+    if cmd is not None:
+        return cmd
+    ev.wait(timeout)
+    return pop(pc_ip)

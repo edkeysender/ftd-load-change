@@ -146,6 +146,16 @@ func (c *Client) DeployResult(pcIP, folder, mode, ref string, clean bool) {
 	}
 }
 
+// BrowseResult returns a directory listing for a config-panel browse request.
+func (c *Client) BrowseResult(pcIP, reqID, path string, entries []BrowseEntry, errStr string) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/browse-result", map[string]any{
+		"req_id": reqID, "path": path, "entries": entries, "error": errStr,
+	})
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // PostSizeReport posts per-app byte sizes for the bootstrap panel.
 func (c *Client) PostSizeReport(pcIP, folder string, sizes map[string]int64) error {
 	resp, err := c.do("POST", "/agents/"+pcIP+"/size-report-result", map[string]any{
