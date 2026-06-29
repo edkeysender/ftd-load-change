@@ -35,7 +35,8 @@ echo ""
 
 echo "[1/5] Installing packages..."
 apt update
-apt install -y python3 python3-venv python3-pip git
+apt install -y python3 python3-venv python3-pip git git-lfs
+git lfs install --system 2>/dev/null || git lfs install || true   # enable LFS filters
 
 echo "[2/5] Creating data dir + venv..."
 mkdir -p "$DATA_DIR/work"

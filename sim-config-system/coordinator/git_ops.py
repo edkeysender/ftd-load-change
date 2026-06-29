@@ -84,6 +84,9 @@ def ensure_repo():
     # Pi without a global git identity. Per-op -c flags still override for attribution.
     _git("config", "user.name", "sim-coordinator", check=False)
     _git("config", "user.email", "coordinator@sim.local", check=False)
+    # Git LFS: configure clean/smudge filters + pre-push hook for this clone so
+    # large binaries (per .gitattributes) are stored in LFS instead of bloating git.
+    _git("lfs", "install", "--local", check=False)
     _seed_root_files()
 
 
@@ -101,6 +104,9 @@ def _seed_root_files():
     dst_ignore = config.WORK_CLONE / ".gitignore"
     if not dst_ignore.exists() and config.SEED_GITIGNORE and config.SEED_GITIGNORE.exists():
         shutil.copyfile(config.SEED_GITIGNORE, dst_ignore)
+    dst_attrs = config.WORK_CLONE / ".gitattributes"
+    if not dst_attrs.exists() and config.SEED_GITATTRIBUTES and config.SEED_GITATTRIBUTES.exists():
+        shutil.copyfile(config.SEED_GITATTRIBUTES, dst_attrs)
 
 
 def clear_folder(folder: str):

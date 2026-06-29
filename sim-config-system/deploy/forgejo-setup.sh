@@ -48,6 +48,9 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "[1/7] Installing Docker engine..."
   apt update && apt install -y docker.io
 fi
+# git-lfs on the Pi (the coordinator commits/pushes LFS blobs)
+command -v git-lfs >/dev/null 2>&1 || { apt update && apt install -y git-lfs; }
+git lfs install --system 2>/dev/null || true
 systemctl enable --now docker 2>/dev/null || true
 echo "[1/7] Docker: $(docker --version)"
 
@@ -65,6 +68,7 @@ docker run -d --name "$CT" --restart unless-stopped \
   -e FORGEJO__service__DISABLE_REGISTRATION=true \
   -e FORGEJO__service__REQUIRE_SIGNIN_VIEW=false \
   -e FORGEJO__security__LOGIN_REMEMBER_DAYS=3650 \
+  -e FORGEJO__server__LFS_START_SERVER=true \
   -e FORGEJO__server__DOMAIN="$PI_HOST" \
   -e FORGEJO__server__HTTP_PORT=3000 \
   -e FORGEJO__server__ROOT_URL="http://$PI_HOST:3000/" \

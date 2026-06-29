@@ -1,0 +1,15 @@
+# Git LFS — large binaries are stored content-addressed (deduped) in LFS, so the
+# working repo stays lean and unchanged files cost nothing across versions.
+# Config/text stays normal git, so you still get readable diffs in Forgejo.
+*.dll   filter=lfs diff=lfs merge=lfs -text
+*.exe   filter=lfs diff=lfs merge=lfs -text
+*.bin   filter=lfs diff=lfs merge=lfs -text
+*.dat   filter=lfs diff=lfs merge=lfs -text
+*.pdb   filter=lfs diff=lfs merge=lfs -text
+*.pak   filter=lfs diff=lfs merge=lfs -text
+*.so    filter=lfs diff=lfs merge=lfs -text
+*.dylib filter=lfs diff=lfs merge=lfs -text
+*.zip   filter=lfs diff=lfs merge=lfs -text
+*.7z    filter=lfs diff=lfs merge=lfs -text
+*.msi   filter=lfs diff=lfs merge=lfs -text
+*.cab   filter=lfs diff=lfs merge=lfs -text

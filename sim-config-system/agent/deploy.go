@@ -50,6 +50,11 @@ func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 			return fmt.Errorf("sparse-checkout init: %v: %s", err, out)
 		}
 	}
+	// Configure Git LFS filters for this clone so large binaries materialize on
+	// checkout. Non-fatal: a PC without git-lfs / a config-only load still works.
+	if out, err := gitCmd(cfg, "lfs", "install", "--local"); err != nil {
+		log.Printf("[deploy] lfs install: %v: %s", err, out)
+	}
 	if out, err := gitCmd(cfg, "sparse-checkout", "set", folder); err != nil {
 		return fmt.Errorf("sparse-checkout set: %v: %s", err, out)
 	}
@@ -78,6 +83,12 @@ func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 	}
 	if out, err := gitCmd(cfg, "clean", "-fd", "--", folder); err != nil {
 		return fmt.Errorf("clean: %v: %s", err, out)
+	}
+	// Materialize LFS blobs for the checked-out ref (real binaries, not pointers).
+	// Non-fatal + loud: if this PC versions binaries it MUST have git-lfs installed
+	// (Git for Windows bundles it) or the mirror would push pointer files to live.
+	if out, err := gitCmd(cfg, "lfs", "pull"); err != nil {
+		log.Printf("[deploy] WARN lfs pull failed — install git-lfs if this PC versions binaries: %v: %s", err, out)
 	}
 	return nil
 }
