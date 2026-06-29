@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS dev_session (
     holder     TEXT,                -- user who owns the lock; NULL = no active session
     started_at REAL
 );
+CREATE TABLE IF NOT EXISTS dev_versions (
+    tag        TEXT PRIMARY KEY,    -- dev-1, dev-2, ... (test snapshots of dev)
+    message    TEXT,
+    author     TEXT,
+    commit_sha TEXT,
+    created_at REAL
+);
 CREATE TABLE IF NOT EXISTS deploys (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     ref        TEXT,
@@ -150,6 +157,31 @@ def next_version_tag():
     latest = vers[0]["tag"].lstrip("v")
     major, minor = (latest.split(".") + ["0"])[:2]
     return f"v{major}.{int(minor) + 1}"
+
+
+# --- dev test versions (snapshots of the dev branch) --------------------
+def record_dev_version(tag, message, author, commit_sha):
+    with conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO dev_versions (tag, message, author, commit_sha, created_at) VALUES (?,?,?,?,?)",
+            (tag, message, author, commit_sha, time.time()),
+        )
+
+
+def list_dev_versions():
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM dev_versions ORDER BY created_at DESC")]
+
+
+def next_dev_tag():
+    """Next dev-N tag (highest existing N + 1)."""
+    n = 0
+    for r in list_dev_versions():
+        try:
+            n = max(n, int(r["tag"].split("-", 1)[1]))
+        except (IndexError, ValueError):
+            pass
+    return f"dev-{n + 1}"
 
 
 # --- bootstrap: imports + size reports ----------------------------------

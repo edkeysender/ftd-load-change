@@ -308,6 +308,29 @@ def dev_end():
     return {"released": True}
 
 
+@app.get("/dev/versions")
+def dev_versions():
+    """Admin: list of dev test snapshots (dev-N), with the currently-live one
+    flagged by sha so you can see what the sim is testing."""
+    live = git_ops.ref_sha(config.TRAINING_LIVE) if (config.WORK_CLONE / ".git").exists() else None
+    return {"versions": db.list_dev_versions(), "training_live_sha": live}
+
+
+class SnapshotReq(BaseModel):
+    message: str
+    author: str
+
+
+@app.post("/dev/snapshot")
+def dev_snapshot(req: SnapshotReq):
+    """Freeze the current dev tip as a named test version (dev-N) to deploy to the
+    sim for testing before promoting to a customer training version."""
+    tag = db.next_dev_tag()
+    sha = git_ops.snapshot_dev(tag, req.message, req.author)
+    db.record_dev_version(tag, req.message, req.author, sha or "")
+    return {"tag": tag, "sha": sha}
+
+
 class CaptureReq(BaseModel):
     pc: str
 

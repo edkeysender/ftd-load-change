@@ -200,12 +200,22 @@ def promote(message: str, author: str, new_tag: str):
 
 
 def rollback(tag: str):
-    """Point training-live at an older immutable tag (deploy happens separately).
+    """Point training-live at an immutable tag (deploy happens separately).
     Force-push: moving the pointer backwards is a non-fast-forward update."""
     with _WRITE_LOCK:
         _git("branch", "-f", config.TRAINING_LIVE, tag)
         _push_force(config.TRAINING_LIVE)
         return head_sha(config.TRAINING_LIVE)
+
+
+def snapshot_dev(tag: str, message: str, author: str):
+    """Tag the current dev tip as a named test version (dev-N) so admins have a
+    list of testable builds to deploy to the sim before promoting."""
+    with _WRITE_LOCK:
+        sha = head_sha(config.DEV_BRANCH)
+        _git(*_ident(author), "tag", "-a", tag, config.DEV_BRANCH, "-m", message)
+        _push(tag)
+        return sha
 
 
 def changed_files(base: str, head: str):

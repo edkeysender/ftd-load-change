@@ -69,11 +69,22 @@
   </section>
 
   <section>
-    <h2>Versions <button class="ghost" style="margin-left:auto" onclick="deploy()">Deploy training-live</button></h2>
-    <div class="hint">Immutable <code>v1.x</code> tags. The live badge marks what <code>training-live</code> points at.</div>
+    <h2>Training versions <span class="muted" style="font-size:11px;font-weight:400">(customer)</span>
+      <button class="ghost" style="margin-left:auto" onclick="deploy()">Re-deploy live</button></h2>
+    <div class="hint">Immutable <code>v1.x</code> releases. <span class="live-badge">LIVE</span> = what the sim runs now. Deploy any to the whole sim.</div>
     <table>
       <thead><tr><th>Version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
       <tbody id="versions"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Dev test versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
+      <button class="ghost" style="margin-left:auto" onclick="snapshotDev()">Snapshot dev → test version</button></h2>
+    <div class="hint">Frozen <code>dev-N</code> snapshots to deploy to the sim for testing before promoting. Capture changes in the Dev panel first, then snapshot.</div>
+    <table>
+      <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
+      <tbody id="devversions"></tbody>
     </table>
   </section>
 
@@ -202,9 +213,9 @@ let selectedApps = new Map();    // live-path -> {name, run, start_delay, versio
 const safe = async p => { try { return await p; } catch (e) { return null; } };
 
 async function refresh() {
-  const [pcs, vers, boot, mpcs, cfg] = await Promise.all([
+  const [pcs, vers, boot, mpcs, cfg, devvers] = await Promise.all([
     safe(api('GET', '/pcs')), safe(api('GET', '/versions')), safe(api('GET', '/bootstrap')),
-    safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')),
+    safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')), safe(api('GET', '/dev/versions')),
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
   if (mpcs) {
@@ -215,6 +226,7 @@ async function refresh() {
   }
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
+  if (devvers) renderDevVersions(devvers);
   if (!scanning) { const d = await safe(api('GET', '/discover')); if (d) renderHosts(d); }
   $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
@@ -248,9 +260,25 @@ function renderVersions(v) {
       <td>${tagCell} ${isLive ? '<span class="live-badge">LIVE</span>' : ''}</td>
       <td>${esc(x.message)}</td><td>${esc(x.author)}</td>
       <td class="muted">${ago(x.created_at)}</td>
-      <td class="row-actions">${isLive ? '' : `<button class="ghost" onclick="rollback('${esc(x.tag)}')">Rollback to this</button>`}</td>
+      <td class="row-actions">${isLive ? '<span class="muted">live</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="muted">No versions yet — seal v1.0 in Bootstrap.</td></tr>';
+}
+
+function renderDevVersions(v) {
+  const live = v.training_live_sha;
+  $('devversions').innerHTML = (v.versions || []).map(x => {
+    const isLive = live && x.commit_sha && x.commit_sha === live;
+    const tagCell = FORGEJO
+      ? `<a href="${FORGEJO}/src/tag/${encodeURIComponent(x.tag)}" target="_blank"><b>${esc(x.tag)}</b> ↗</a>`
+      : `<b>${esc(x.tag)}</b>`;
+    return `<tr>
+      <td>${tagCell} ${isLive ? '<span class="live-badge">TESTING</span>' : ''}</td>
+      <td>${esc(x.message)}</td><td>${esc(x.author)}</td>
+      <td class="muted">${ago(x.created_at)}</td>
+      <td class="row-actions">${isLive ? '<span class="muted">on sim</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">No dev test versions — capture changes, then "Snapshot dev".</td></tr>';
 }
 
 function renderDev(pcs, agents, lock) {
@@ -310,8 +338,14 @@ function renderHosts(d) {
 
 // ---- actions ----
 async function act(fn, msg) { try { await fn(); if (msg) toast(msg); await refresh(); } catch (e) { toast(e.message, true); } }
-const deploy   = () => act(() => api('POST', '/deploy', {}), 'Deploying training-live…');
-const rollback = t => confirm('Roll back training-live to ' + t + ' and redeploy?') && act(() => api('POST', '/rollback', { tag: t }), 'Rolling back to ' + t);
+const deploy    = () => act(() => api('POST', '/deploy', {}), 'Re-deploying live to the sim…');
+const deployRef = t => confirm('Deploy ' + t + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: t }), 'Deploying ' + t + ' to the sim…');
+function snapshotDev() {
+  const author = requireUser();
+  const msg = prompt('What does this dev test version contain?');
+  if (!msg) return;
+  act(() => api('POST', '/dev/snapshot', { message: msg, author }), 'Snapshotting dev → test version…');
+}
 const startDev = () => act(() => api('POST', '/dev/start', { user: requireUser() }), 'Dev session started');
 const endDev   = () => act(() => api('POST', '/dev/end', {}), 'Dev session ended');
 const capture  = pc => act(() => api('POST', '/dev/capture', { pc }), 'Capturing ' + pc + '…');
