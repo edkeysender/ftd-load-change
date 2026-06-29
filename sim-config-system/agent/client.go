@@ -68,7 +68,18 @@ func (c *Client) Heartbeat(hb Heartbeat) {
 
 // PollCommand long-polls for the next command (nil if none pending).
 func (c *Client) PollCommand() (*Command, error) {
-	resp, err := c.do("GET", "/agents/"+c.pcIP+"/commands", nil)
+	return c.fetchCommand("/agents/" + c.pcIP + "/commands")
+}
+
+// GetEnforce asks the coordinator for the current training-live deploy command
+// (used once at startup to sync + launch before anything runs). nil if nothing
+// to enforce (no training-live yet).
+func (c *Client) GetEnforce() (*Command, error) {
+	return c.fetchCommand("/agents/" + c.pcIP + "/enforce")
+}
+
+func (c *Client) fetchCommand(path string) (*Command, error) {
+	resp, err := c.do("GET", path, nil)
 	if err != nil {
 		return nil, err
 	}

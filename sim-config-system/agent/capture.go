@@ -10,31 +10,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
-
-// QuiesceApps gracefully stops versioned apps (taskkill without /F sends a close
-// to GUI windows), waits for them to flush, then force-kills stragglers so all
-// file handles are released before we snapshot live.
-func QuiesceApps(apps map[string]AppSpec) {
-	exes := map[string]bool{}
-	for _, app := range apps {
-		if app.Run == "" || app.Repo == "" || len(app.Live) == 0 {
-			continue
-		}
-		exes[filepath.Base(filepath.FromSlash(app.Run))] = true
-	}
-	for exe := range exes {
-		_ = exec.Command("taskkill", "/IM", exe).Run() // graceful
-	}
-	time.Sleep(4 * time.Second)
-	for exe := range exes {
-		_ = exec.Command("taskkill", "/F", "/IM", exe).Run() // force stragglers
-	}
-}
 
 // MirrorToWorktree mirrors each app's live dir(s) onto its repo subtree in the
 // sparse clone, so `git status` then reflects exactly what changed vs dev.

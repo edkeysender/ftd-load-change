@@ -10,5 +10,8 @@
   "_note": "repo_path/git_remote/git_exe are only used for deploy (Phase 2). Import works without them.",
   "repo_path": "D:/sim-config",
   "git_remote": "http://70.84.68.196:3000/sim/sim-config.git",
-  "git_exe": "git"
+  "git_exe": "git",
+
+  "_enforce": "On start, sync training-live then launch the apps (agent owns the launch — remove Windows auto-start). Default true; set false for a passive/testing agent.",
+  "enforce_on_start": true
 }

@@ -164,26 +164,50 @@ func robocopyMirror(src, dst string, xd, xf []string) error {
 	return nil
 }
 
-// RestartApps stops the versioned apps' running instances and relaunches them in
-// start_delay order (preserving launcher.json sequencing). Apps without a repo
-// (e.g. ImmersiveDisplayPRO) are left alone.
-func RestartApps(apps map[string]AppSpec) {
+// appExes returns the distinct exe image names of the versioned, launchable apps.
+func appExes(apps map[string]AppSpec) map[string]bool {
+	exes := map[string]bool{}
+	for _, app := range apps {
+		if app.Run == "" || app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		exes[filepath.Base(filepath.FromSlash(app.Run))] = true
+	}
+	return exes
+}
+
+// StopApps gracefully stops the versioned apps (close request, then force-kill
+// stragglers) so their file handles are released BEFORE the worktree is mirrored
+// onto live. Apps without a repo/run (e.g. ImmersiveDisplayPRO) are left alone.
+// Called before the mirror so nothing runs against half-synced files.
+func StopApps(apps map[string]AppSpec) {
+	exes := appExes(apps)
+	if len(exes) == 0 {
+		return
+	}
+	for exe := range exes {
+		_ = exec.Command("taskkill", "/IM", exe).Run() // graceful close
+	}
+	time.Sleep(4 * time.Second)
+	for exe := range exes {
+		_ = exec.Command("taskkill", "/F", "/IM", exe).Run() // force stragglers
+	}
+}
+
+// StartApps launches the versioned apps in start_delay order — ONLY after the
+// sync has completed (the caller mirrors first). This is the guarantee that no
+// app runs before its files are fully in place.
+func StartApps(apps map[string]AppSpec) {
 	type item struct {
 		name string
 		spec AppSpec
 	}
 	var items []item
-	exeNames := map[string]bool{}
 	for name, app := range apps {
 		if app.Run == "" || app.Repo == "" || len(app.Live) == 0 {
 			continue
 		}
 		items = append(items, item{name, app})
-		exeNames[filepath.Base(filepath.FromSlash(app.Run))] = true
-	}
-	// Stop running instances (apps that share an exe, e.g. the displays, die once).
-	for exe := range exeNames {
-		_ = exec.Command("taskkill", "/F", "/IM", exe).Run()
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].spec.StartDelay < items[j].spec.StartDelay })
 	start := time.Now()
@@ -196,10 +220,10 @@ func RestartApps(apps map[string]AppSpec) {
 		cmd := exec.Command(run)
 		cmd.Dir = filepath.Dir(run)
 		if err := cmd.Start(); err != nil {
-			log.Printf("[restart] %s failed: %v", it.name, err)
+			log.Printf("[launch] %s failed: %v", it.name, err)
 			continue
 		}
-		log.Printf("[restart] launched %s (delay %ds)", it.name, it.spec.StartDelay)
+		log.Printf("[launch] %s (delay %ds)", it.name, it.spec.StartDelay)
 	}
 }
 

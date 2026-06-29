@@ -53,6 +53,19 @@ func (a *Agent) Run() {
 	}()
 
 	log.Printf("agent %s (%s) started in state %s", a.cfg.PCIP, a.cfg.Folder, a.state)
+
+	// Boot-time enforce: sync training-live and launch the apps BEFORE anything
+	// else runs. This is what guarantees apps never start before a full sync —
+	// the agent owns the launch, so remove the apps from Windows auto-start.
+	if a.cfg.enforceOnStart() {
+		if cmd, err := a.api.GetEnforce(); err != nil {
+			log.Printf("enforce-on-start: %v (will rely on polled commands)", err)
+		} else if cmd != nil {
+			log.Printf("enforce-on-start: deploying %s", cmd.Ref)
+			a.dispatch(*cmd)
+		}
+	}
+
 	for {
 		cmd, err := a.api.PollCommand() // long-poll
 		if err != nil {

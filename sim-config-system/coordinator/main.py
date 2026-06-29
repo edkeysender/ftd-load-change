@@ -306,6 +306,19 @@ def commands(pc_ip: str, authorization: str | None = Header(None)):
     return {"command": manifest.pop(pc_ip)}
 
 
+@app.get("/agents/{pc_ip}/enforce")
+def enforce(pc_ip: str, authorization: str | None = Header(None)):
+    """Current training-live deploy command for this PC (used by the agent at
+    startup to sync + launch before anything runs). Null until v1.0 is sealed or
+    the PC isn't in the manifest."""
+    _auth(authorization)
+    if pc_ip not in manifest.load_manifest()["pcs"]:
+        return {"command": None}
+    if not git_ops.ref_sha(config.TRAINING_LIVE):
+        return {"command": None}
+    return {"command": _mirror_cmd(pc_ip, "deploy", config.TRAINING_LIVE)}
+
+
 @app.post("/agents/{pc_ip}/import-result")
 def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
     """Phase 1 bootstrap upload. Stage the PC's tree into the working clone

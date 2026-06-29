@@ -10,6 +10,15 @@ type AgentConfig struct {
 	RepoPath       string `json:"repo_path"`       // local sparse clone path, e.g. D:/sim-config (deploy only)
 	GitRemote      string `json:"git_remote"`      // Forgejo URL (deploy only; not needed for import)
 	GitExe         string `json:"git_exe"`         // git.exe path (deploy only); "git" if on PATH
+
+	// On startup, sync training-live then launch the apps (replaces Windows
+	// auto-start so nothing runs before the sync completes). Default true; set
+	// false for a passive agent (e.g. during testing).
+	EnforceOnStart *bool `json:"enforce_on_start"`
+}
+
+func (c AgentConfig) enforceOnStart() bool {
+	return c.EnforceOnStart == nil || *c.EnforceOnStart
 }
 
 // State is the agent's place in the lifecycle (see PROJECT_SPEC.md section 8).

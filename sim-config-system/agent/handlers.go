@@ -87,11 +87,12 @@ func (a *Agent) doDeploy(c Command) {
 		a.fail(err)
 		return
 	}
+	StopApps(c.Apps)                                  // stop first: nothing runs during sync
 	if err := MirrorToLive(a.cfg, c.Apps); err != nil { // worktree -> live, honoring excludes
 		a.fail(err)
 		return
 	}
-	RestartApps(c.Apps) // launch in start_delay order
+	StartApps(c.Apps)   // launch in start_delay order — only after the full sync
 	a.remember(c, true) // store apps+ref; just-deployed => clean
 	a.setState(StateTraining)
 	a.api.DeployResult(a.cfg.PCIP, c.Folder, "TRAINING", c.Ref, true)
@@ -107,11 +108,12 @@ func (a *Agent) doTrack(c Command) {
 		a.fail(err)
 		return
 	}
+	StopApps(c.Apps)
 	if err := MirrorToLive(a.cfg, c.Apps); err != nil {
 		a.fail(err)
 		return
 	}
-	RestartApps(c.Apps)
+	StartApps(c.Apps)
 	a.remember(c, true)
 	a.setState(StateDevTracking)
 	log.Printf("[track] done -> DEV_TRACKING @ %s", c.Ref)
@@ -127,7 +129,7 @@ func (a *Agent) doCapture(c Command) {
 		a.fail(err)
 		return
 	}
-	QuiesceApps(c.Apps) // close file handles before snapshotting
+	StopApps(c.Apps) // close file handles before snapshotting
 	if err := MirrorToWorktree(a.cfg, c.Apps); err != nil {
 		a.fail(err)
 		return
@@ -142,7 +144,7 @@ func (a *Agent) doCapture(c Command) {
 		a.fail(err)
 		return
 	}
-	RestartApps(c.Apps) // resume the dev session
+	StartApps(c.Apps) // resume the dev session (apps were stopped above)
 	a.remember(c, true)
 	a.setState(StateDevTracking)
 	log.Printf("[capture] done")
