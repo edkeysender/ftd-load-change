@@ -21,6 +21,16 @@ func (a *Agent) doImport(c Command) {
 	log.Printf("[import] folder=%s apps=%d (read-only)", c.Folder, len(c.Apps))
 	const budget = 48 << 20 // upload in ~48MB batches so huge folders don't OOM
 
+	// Quick size pass first so the UI can show a real progress bar.
+	var totalExpected int64
+	for _, app := range c.Apps {
+		if app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		sz, _ := appSize(app.Live, app.Exclude)
+		totalExpected += sz
+	}
+
 	batch := map[string][]byte{}
 	var batchBytes, totalBytes int64
 	var totalFiles, batchIdx int
@@ -28,7 +38,7 @@ func (a *Agent) doImport(c Command) {
 	failed := false
 
 	upload := func(final bool) bool {
-		if err := a.api.UploadImportBundle(a.cfg.PCIP, c.Folder, batch, missing, batchIdx, final); err != nil {
+		if err := a.api.UploadImportBundle(a.cfg.PCIP, c.Folder, batch, missing, batchIdx, final, totalExpected); err != nil {
 			a.fail(err)
 			failed = true
 			return false

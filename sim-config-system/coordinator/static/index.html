@@ -268,13 +268,24 @@ function renderDev(pcs, agents, lock) {
 function renderBootstrap(pcs, boot) {
   const imp = {}; (boot.imports || []).forEach(i => imp[i.pc_ip] = i);
   const sz = {}; (boot.sizes || []).forEach(s => sz[s.pc_ip] = s);
+  const progAll = boot.progress || {};
   $('bootstrap').innerHTML = pcs.map(p => {
-    const i = imp[p.ip], s = sz[p.ip];
+    const i = imp[p.ip], s = sz[p.ip], prog = progAll[p.ip];
     const total = s ? Object.values(s.sizes || {}).reduce((a,b) => a + (+b||0), 0) : null;
     const miss = (i && i.missing && i.missing.length) ? `<span class="bad">${i.missing.length} missing dir(s)</span>` : '';
+    let importedCell;
+    if (prog && !prog.done) {
+      const pct = prog.total_bytes ? Math.min(100, Math.round(100 * prog.received_bytes / prog.total_bytes)) : 0;
+      importedCell =
+        `<div style="font-size:12px">importing… ${fmtBytes(prog.received_bytes)} / ${fmtBytes(prog.total_bytes)} (${pct}%)</div>` +
+        `<div style="background:#ece9e0;border-radius:6px;height:7px;width:160px;margin-top:3px;overflow:hidden">` +
+        `<div style="background:#1d7a59;height:100%;width:${pct}%;transition:width .3s"></div></div>`;
+    } else {
+      importedCell = i ? `${i.file_count} files (${fmtBytes(i.byte_count)})<br><span class="muted">${ago(i.imported_at)}</span>` : '<span class="muted">—</span>';
+    }
     return `<tr>
       <td><b>${esc(p.ip)}</b> <span class="muted">${esc(p.folder||'')}</span></td>
-      <td>${i ? `${i.file_count} files (${fmtBytes(i.byte_count)})<br><span class="muted">${ago(i.imported_at)}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${importedCell}</td>
       <td>${total != null ? fmtBytes(total) : '<span class="muted">—</span>'}</td>
       <td>${miss}</td>
       <td class="row-actions">
@@ -306,11 +317,19 @@ const endDev   = () => act(() => api('POST', '/dev/end', {}), 'Dev session ended
 const capture  = pc => act(() => api('POST', '/dev/capture', { pc }), 'Capturing ' + pc + '…');
 function bootstrapAction(pc, path, label) {
   api('POST', path, {})
-    .then(() => {
-      toast(label + ' running on ' + pc + ' — read-only; result appears below in a few seconds');
-      [1500, 3000, 5000, 8000, 12000].forEach(ms => setTimeout(refresh, ms));
-    })
+    .then(() => { toast(label + ' running on ' + pc + '…'); pollBootstrap(pc); })
     .catch(e => toast(e.message, true));
+}
+async function pollBootstrap(pc) {
+  for (let i = 0; i < 1200; i++) {            // ~30 min cap at 1.5s
+    let boot;
+    try { boot = await api('GET', '/bootstrap'); } catch (e) { break; }
+    if (MANIFEST.length) renderBootstrap(MANIFEST, boot);
+    const p = (boot.progress || {})[pc];
+    if (p && p.done) { refresh(); break; }     // import finished
+    if (!p && i > 6) { refresh(); break; }      // nothing in flight (e.g. size report) -> stop
+    await new Promise(r => setTimeout(r, 1500));
+  }
 }
 const importPc = pc => bootstrapAction(pc, '/import/' + pc, 'Import');
 const sizeReport = pc => bootstrapAction(pc, '/import/' + pc + '/size-report', 'Size report');

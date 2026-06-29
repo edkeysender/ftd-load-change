@@ -16,6 +16,9 @@ from . import config, db, discovery, git_ops, manifest
 # In-flight filesystem-browse requests: req_id -> {"event": Event, "result": dict}
 _browse_requests: dict = {}
 
+# Live import progress per PC: pc_ip -> {total_bytes, received_bytes, received_files, done}
+_import_progress: dict = {}
+
 app = FastAPI(title="Sim Config Coordinator")
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -149,8 +152,9 @@ def versions():
 
 @app.get("/bootstrap")
 def bootstrap_status():
-    """Bootstrap panel data: per-PC import status + last size report."""
-    return {"imports": db.list_imports(), "sizes": db.list_size_reports()}
+    """Bootstrap panel data: per-PC import status + last size report + live progress."""
+    return {"imports": db.list_imports(), "sizes": db.list_size_reports(),
+            "progress": _import_progress}
 
 
 # ---- host discovery / enrollment list ----------------------------------
@@ -397,8 +401,15 @@ def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
     if payload.get("batch_index", 0) == 0:
         git_ops.clear_folder(folder)
+        _import_progress[pc_ip] = {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
+                                   "received_bytes": 0, "received_files": 0, "done": False}
     git_ops.write_files(files)
+    prog = _import_progress.setdefault(pc_ip, {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
+                                               "received_bytes": 0, "received_files": 0, "done": False})
+    prog["received_bytes"] += sum(len(b) for b in files.values())
+    prog["received_files"] += len(files)
     if payload.get("final", True):
+        prog["done"] = True
         n, b = git_ops.folder_stats(folder)
         db.record_import(pc_ip, folder, n, b, payload.get("missing", []))
     return {"staged_files": len(files), "batch": payload.get("batch_index", 0)}

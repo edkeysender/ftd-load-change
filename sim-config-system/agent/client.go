@@ -142,14 +142,14 @@ func (c *Client) UploadCaptureBundle(pcIP, folder string, changed map[string][]b
 // UploadImportBundle posts ONE batch of a PC's imported tree (Phase 1 bootstrap).
 // Large folders are streamed in batches to bound memory. batchIndex 0 tells the
 // coordinator to clear the folder first; final=true records the import.
-func (c *Client) UploadImportBundle(pcIP, folder string, files map[string][]byte, missing []string, batchIndex int, final bool) error {
+func (c *Client) UploadImportBundle(pcIP, folder string, files map[string][]byte, missing []string, batchIndex int, final bool, totalBytes int64) error {
 	enc := make(map[string]string, len(files))
 	for p, b := range files {
 		enc[p] = b64(b)
 	}
 	resp, err := c.do("POST", "/agents/"+pcIP+"/import-result", map[string]any{
 		"folder": folder, "missing": missing, "files": enc,
-		"batch_index": batchIndex, "final": final,
+		"batch_index": batchIndex, "final": final, "total_bytes": totalBytes,
 	})
 	if err != nil {
 		return err
