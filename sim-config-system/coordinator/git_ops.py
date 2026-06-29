@@ -30,6 +30,13 @@ def ref_sha(ref):
     return r.stdout.strip() or None
 
 
+def show_file(ref, path):
+    """Contents of a file as of a git ref (e.g. manifest.yaml at v1.0), or None if
+    the ref/file doesn't exist. Lets each version carry its own manifest."""
+    r = _git("show", f"{ref}:{path}", check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
 def _has_remote() -> bool:
     return bool(_git("remote", check=False).stdout.strip())
 

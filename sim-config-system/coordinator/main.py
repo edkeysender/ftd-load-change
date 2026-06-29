@@ -131,11 +131,12 @@ def whoami(request: Request, authorization: str | None = Header(None)):
 
 
 def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
-    """Build a deploy/track command for one PC. Carries the resolved apps (with
-    merged excludes) + folder + git remote so the agent needs no local config."""
+    """Build a deploy/track command for one PC. Reads the manifest AS OF `ref` so
+    each version syncs its own file set; carries resolved apps + folder + git
+    remote so the agent needs no local config."""
     return {"type": ctype, "ref": ref,
-            "folder": manifest.pc_folder(ip),
-            "apps": manifest.resolved_apps(ip),
+            "folder": manifest.pc_folder(ip, ref) or manifest.pc_folder(ip),
+            "apps": manifest.resolved_apps(ip, ref),
             "git_remote": config.GIT_REMOTE}
 
 

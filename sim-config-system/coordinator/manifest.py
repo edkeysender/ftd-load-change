@@ -18,18 +18,34 @@ def load_manifest():
         return yaml.safe_load(f)
 
 
-def pc_folder(pc_ip):
-    return load_manifest()["pcs"][pc_ip]["folder"]
+def load_manifest_at(ref):
+    """The manifest as of a git ref (so deploying a version uses THAT version's
+    sync config). Falls back to the working-tree manifest if the ref has none."""
+    from . import git_ops
+    txt = git_ops.show_file(ref, "manifest.yaml")
+    return yaml.safe_load(txt) if txt else load_manifest()
 
 
-def resolved_apps(pc_ip: str) -> dict:
+def _manifest(ref=None):
+    return load_manifest_at(ref) if ref else load_manifest()
+
+
+def pc_folder(pc_ip, ref=None):
+    return _manifest(ref).get("pcs", {}).get(pc_ip, {}).get("folder")
+
+
+def resolved_apps(pc_ip: str, ref=None) -> dict:
     """Apps for a PC with the default exclude set merged into each app's own
-    excludes (defaults first, dedup, order preserved). This is what the agent
-    receives so it never needs the manifest defaults locally."""
-    m = load_manifest()
+    excludes (defaults first, dedup, order preserved). Read from `ref`'s manifest
+    when given, so each version syncs its own file set. Empty if the PC isn't in
+    that manifest."""
+    m = _manifest(ref)
+    pc = m.get("pcs", {}).get(pc_ip)
+    if not pc:
+        return {}
     defaults = m.get("defaults", {}).get("exclude", []) or []
     apps = {}
-    for name, spec in m["pcs"][pc_ip]["apps"].items():
+    for name, spec in (pc.get("apps") or {}).items():
         spec = dict(spec)
         merged, seen = [], set()
         for pat in defaults + (spec.get("exclude") or []):
