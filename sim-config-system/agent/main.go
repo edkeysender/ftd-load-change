@@ -26,9 +26,49 @@ type Agent struct {
 
 func main() {
 	cleanupOldBinary()              // remove leftover .old from a prior self-update
-	cfg := LoadConfig("agent.json") // TODO: also accept Windows service args
+	cfg := LoadConfig("agent.json") // optional; baked defaults fill the rest
+	resolveConfig(&cfg)
 	a := &Agent{cfg: cfg, state: StateUnseeded, api: NewClient(cfg), clean: true}
 	a.Run()
+}
+
+// resolveConfig fills anything agent.json didn't specify: coordinator + token from
+// the baked-in build values, sane path defaults, and identity (pc_ip + folder)
+// auto-detected from the coordinator via /whoami. Result: drop the exe on a PC and
+// run it — no config file needed.
+func resolveConfig(cfg *AgentConfig) {
+	if cfg.CoordinatorURL == "" {
+		cfg.CoordinatorURL = DefaultCoordinator
+	}
+	if cfg.Token == "" {
+		cfg.Token = DefaultToken
+	}
+	if cfg.RepoPath == "" {
+		cfg.RepoPath = "C:/sim-agent/repo"
+	}
+	if cfg.GitExe == "" {
+		cfg.GitExe = "git"
+	}
+	if cfg.CoordinatorURL == "" {
+		panic("no coordinator URL: provide agent.json or build with -ldflags -X main.DefaultCoordinator=...")
+	}
+	if cfg.PCIP != "" {
+		return // explicit identity wins
+	}
+	// Auto-identity: ask the coordinator what IP it sees us as. Retry until reachable.
+	for {
+		ip, folder, err := NewClient(*cfg).Whoami()
+		if err == nil && ip != "" {
+			cfg.PCIP = ip
+			if cfg.Folder == "" {
+				cfg.Folder = folder
+			}
+			log.Printf("identity from coordinator: %s (folder=%q)", ip, cfg.Folder)
+			return
+		}
+		log.Printf("waiting for coordinator at %s for identity: %v", cfg.CoordinatorURL, err)
+		time.Sleep(3 * time.Second)
+	}
 }
 
 func (a *Agent) Run() {

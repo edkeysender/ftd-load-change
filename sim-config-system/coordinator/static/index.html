@@ -372,14 +372,24 @@ const appKey = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 async function loadConfig() {
   try {
     manifestObj = (await api('GET', '/manifest/json')).manifest || { pcs: {} };
+    if (!manifestObj.pcs) manifestObj.pcs = {};
+    let agents = [];
+    try { agents = (await api('GET', '/pcs')).agents || []; } catch (e) {}
     const sel = $('browsePc'), prev = sel.value;
     sel.innerHTML = '';
-    Object.keys(manifestObj.pcs || {}).forEach(ip => {
+    const seen = new Set();
+    Object.keys(manifestObj.pcs).forEach(ip => {
+      seen.add(ip);
       const o = document.createElement('option');
       o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')';
       sel.appendChild(o);
     });
-    if (prev && manifestObj.pcs[prev]) sel.value = prev;
+    agents.filter(a => a.online && !seen.has(a.pc_ip)).forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.pc_ip; o.textContent = a.pc_ip + ' — online, not in manifest';
+      sel.appendChild(o);
+    });
+    if (prev) sel.value = prev;
     browsePc = sel.value;
     if (browsePc) { loadSelectedFromManifest(); reloadTree(); }
   } catch (e) { setBrowseStatus('load failed: ' + e.message, 'bad'); }
@@ -483,7 +493,7 @@ function renderSelected() {
 async function saveBrowserManifest() {
   if (!browsePc) return;
   const pc = manifestObj.pcs[browsePc] || {};
-  const folder = pc.folder || browsePc;
+  const folder = pc.folder || ('pc-' + browsePc.replace(/\./g, '-'));
   // index existing apps by their live path so we preserve launch config (run/delay).
   const byLive = {};
   for (const [k, a] of Object.entries(pc.apps || {})) {

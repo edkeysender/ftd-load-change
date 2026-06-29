@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -26,16 +27,39 @@ type Heartbeat struct {
 	Version    string `json:"version,omitempty"`
 }
 
+// LoadConfig reads an OPTIONAL agent.json. Missing file is fine (zero-config
+// agent); a malformed file is warned about but not fatal.
 func LoadConfig(path string) AgentConfig {
+	var c AgentConfig
 	b, err := os.ReadFile(path)
 	if err != nil {
-		panic(err)
+		return c // no agent.json -> rely on baked defaults + /whoami
 	}
-	var c AgentConfig
 	if err := json.Unmarshal(b, &c); err != nil {
-		panic(err)
+		log.Printf("warning: ignoring malformed %s: %v", path, err)
 	}
 	return c
+}
+
+// Whoami asks the coordinator which IP it sees us as (authoritative identity) and
+// the manifest folder for that IP (may be empty if the PC isn't in the manifest).
+func (c *Client) Whoami() (ip, folder string, err error) {
+	resp, err := c.do("GET", "/whoami", nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", "", fmt.Errorf("whoami: %s", resp.Status)
+	}
+	var out struct {
+		IP     string `json:"ip"`
+		Folder string `json:"folder"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", "", err
+	}
+	return out.IP, out.Folder, nil
 }
 
 func NewClient(cfg AgentConfig) *Client {

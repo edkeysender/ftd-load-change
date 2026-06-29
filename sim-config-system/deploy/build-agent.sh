@@ -21,10 +21,20 @@ echo "[build] $(go version)"
 
 mkdir -p "$DIST"
 VER=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo dev)
-echo "[build] Cross-compiling -> windows/amd64 (version $VER) ..."
+
+# Bake the coordinator URL + token into the binary so the agent needs no config
+# file: drop the exe on a PC, run it, and it auto-detects its identity via /whoami.
+ENV_FILE=/etc/sim-config.env
+[ -f "$ENV_FILE" ] && { set -a; . "$ENV_FILE"; set +a; }
+PI_HOST="${PI_HOST:-$(hostname -I | awk '{print $1}')}"
+COORD="http://${PI_HOST}:${SIM_PORT:-8090}"
+TOKEN="${SIM_AGENT_TOKEN:-}"
+
+echo "[build] Cross-compiling -> windows/amd64 (version $VER, coordinator $COORD) ..."
 cd "$AGENT_DIR"
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
-  -ldflags "-X main.Version=$VER" -o "$DIST/simagent.exe" .
+  -ldflags "-X main.Version=$VER -X main.DefaultCoordinator=$COORD -X main.DefaultToken=$TOKEN" \
+  -o "$DIST/simagent.exe" .
 
 echo ""
 echo "Built: $DIST/simagent.exe"

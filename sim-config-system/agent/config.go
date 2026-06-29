@@ -1,7 +1,16 @@
 package main
 
-// AgentConfig is read from a local agent.json on each PC. JSON (not YAML) so the
-// agent stays a zero-dependency, fully static binary.
+// Baked into the binary at build time via -ldflags (see build-agent.sh), so the
+// agent needs no config file: it knows the coordinator + token, then auto-detects
+// its own identity via /whoami. An agent.json, if present, overrides these.
+var (
+	DefaultCoordinator = "" // e.g. http://70.84.68.196:8090
+	DefaultToken       = ""
+)
+
+// AgentConfig is read from an OPTIONAL local agent.json on each PC. JSON (not YAML)
+// so the agent stays a zero-dependency, fully static binary. Anything left empty
+// is filled from baked defaults / coordinator (/whoami) / sane defaults.
 type AgentConfig struct {
 	PCIP           string `json:"pc_ip"`           // this PC's IP, key into the manifest
 	Folder         string `json:"folder"`          // its monorepo folder, e.g. pc-12-display
@@ -39,9 +48,10 @@ type Command struct {
 	Type   string             `json:"type"`   // import | size_report | deploy | track | capture | browse
 	Ref    string             `json:"ref"`    // for deploy/track
 	Folder string             `json:"folder"` // for import/capture
-	Apps   map[string]AppSpec `json:"apps"`   // for import + size_report (resolved specs)
-	ReqID  string             `json:"req_id"` // for browse (correlates the result)
-	Path   string             `json:"path"`   // for browse (dir to list; "" = drives)
+	Apps      map[string]AppSpec `json:"apps"`       // for import + size_report (resolved specs)
+	ReqID     string             `json:"req_id"`     // for browse (correlates the result)
+	Path      string             `json:"path"`       // for browse (dir to list; "" = drives)
+	GitRemote string             `json:"git_remote"` // for deploy/track/capture (Forgejo URL)
 }
 
 // AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the

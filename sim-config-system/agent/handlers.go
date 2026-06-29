@@ -83,6 +83,9 @@ func (a *Agent) doSizeReport(c Command) {
 func (a *Agent) doDeploy(c Command) {
 	a.setState(StateDeploying)
 	log.Printf("[deploy] ref=%s folder=%s apps=%d", c.Ref, c.Folder, len(c.Apps))
+	if c.GitRemote != "" {
+		a.cfg.GitRemote = c.GitRemote
+	}
 	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil {
 		a.fail(err)
 		return
@@ -104,6 +107,9 @@ func (a *Agent) doDeploy(c Command) {
 func (a *Agent) doTrack(c Command) {
 	a.setState(StateDeploying)
 	log.Printf("[track] ref=%s folder=%s apps=%d", c.Ref, c.Folder, len(c.Apps))
+	if c.GitRemote != "" {
+		a.cfg.GitRemote = c.GitRemote
+	}
 	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil {
 		a.fail(err)
 		return
@@ -125,6 +131,9 @@ func (a *Agent) doTrack(c Command) {
 func (a *Agent) doCapture(c Command) {
 	a.setState(StateCapturing)
 	log.Printf("[capture] folder=%s apps=%d", c.Folder, len(c.Apps))
+	if c.GitRemote != "" {
+		a.cfg.GitRemote = c.GitRemote
+	}
 	if err := GitFetchCheckout(a.cfg, c.Folder, c.Ref); err != nil { // ref = dev
 		a.fail(err)
 		return

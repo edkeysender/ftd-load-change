@@ -8,7 +8,7 @@ import threading
 import uuid
 import yaml
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Header, Body
+from fastapi import FastAPI, HTTPException, Header, Body, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from . import config, db, discovery, git_ops, manifest
@@ -112,13 +112,23 @@ def _auth(token: str | None):
         raise HTTPException(401, "bad agent token")
 
 
+@app.get("/whoami")
+def whoami(request: Request, authorization: str | None = Header(None)):
+    """A zero-config agent calls this once at startup to learn the IP the
+    coordinator sees it as (authoritative identity) + its manifest folder."""
+    _auth(authorization)
+    ip = request.client.host if request.client else ""
+    pcs = manifest.load_manifest().get("pcs", {})
+    return {"ip": ip, "folder": (pcs.get(ip) or {}).get("folder")}
+
+
 def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
     """Build a deploy/track command for one PC. Carries the resolved apps (with
-    merged excludes) + folder so the agent can mirror worktree->live and restart
-    without needing the manifest locally."""
+    merged excludes) + folder + git remote so the agent needs no local config."""
     return {"type": ctype, "ref": ref,
             "folder": manifest.pc_folder(ip),
-            "apps": manifest.resolved_apps(ip)}
+            "apps": manifest.resolved_apps(ip),
+            "git_remote": config.GIT_REMOTE}
 
 
 def _enqueue_deploy_all():
@@ -304,7 +314,8 @@ def dev_capture(req: CaptureReq):
         raise HTTPException(409, "no active dev session")
     manifest.enqueue(req.pc, {"type": "capture", "ref": config.DEV_BRANCH,
                               "folder": manifest.pc_folder(req.pc),
-                              "apps": manifest.resolved_apps(req.pc)})
+                              "apps": manifest.resolved_apps(req.pc),
+                              "git_remote": config.GIT_REMOTE})
     return {"capturing": req.pc}
 
 
