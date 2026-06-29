@@ -491,14 +491,11 @@ async function loadManifestFromVersion() {
   const ref = $('loadVersionRef').value;
   try {
     const d = await api('GET', '/manifest/at?ref=' + encodeURIComponent(ref));
-    manifestObj = d.manifest || { pcs: {} }; if (!manifestObj.pcs) manifestObj.pcs = {};
-    $('manifest').value = d.yaml || '';
-    // show the YAML tab WITHOUT reloading the working draft over what we just loaded
-    $('tab-browser').style.display = 'none'; $('tab-yaml').style.display = '';
-    $('tabbtn-yaml').style.background = '#2c2c2a'; $('tabbtn-yaml').style.color = '#fff';
-    $('tabbtn-browser').style.background = '#ece9e0'; $('tabbtn-browser').style.color = '#2c2c2a';
-    const s = $('browsePc'); if (s.value && manifestObj.pcs[s.value]) { browsePc = s.value; loadSelectedFromManifest(); }
+    manifestObj = d.manifest || { pcs: {} };
+    $('manifest').value = d.yaml || '';     // YAML tab
+    await renderBrowserFromManifest();        // File browser tab reflects it too
     setManifestStatus('loaded from ' + ref + ' — edit + Save commits to dev', 'ok');
+    toast('Loaded manifest from ' + ref);
   } catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); toast('load failed: ' + e.message, true); }
 }
 async function saveManifest() {
@@ -517,8 +514,7 @@ function showConfigTab(t) {
   $('tabbtn-browser').style.color = t === 'browser' ? '#fff' : '#2c2c2a';
   $('tabbtn-yaml').style.background = t === 'yaml' ? '#2c2c2a' : '#ece9e0';
   $('tabbtn-yaml').style.color = t === 'yaml' ? '#fff' : '#2c2c2a';
-  if (t === 'browser') loadConfig();
-  if (t === 'yaml') loadManifest();
+  // Just switch view — do NOT reload (that would discard a "Load from version").
 }
 const setBrowseStatus = (m, c) => { const e = $('browse-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
 const setSaveStatus = (m, c) => { const e = $('browser-save-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
@@ -527,27 +523,33 @@ const appKey = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 async function loadConfig() {
   try {
     manifestObj = (await api('GET', '/manifest/json')).manifest || { pcs: {} };
-    if (!manifestObj.pcs) manifestObj.pcs = {};
-    let agents = [];
-    try { agents = (await api('GET', '/pcs')).agents || []; } catch (e) {}
-    const sel = $('browsePc'), prev = sel.value;
-    sel.innerHTML = '';
-    const seen = new Set();
-    Object.keys(manifestObj.pcs).forEach(ip => {
-      seen.add(ip);
-      const o = document.createElement('option');
-      o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')';
-      sel.appendChild(o);
-    });
-    agents.filter(a => a.online && !seen.has(a.pc_ip)).forEach(a => {
-      const o = document.createElement('option');
-      o.value = a.pc_ip; o.textContent = a.pc_ip + ' — online, not in manifest';
-      sel.appendChild(o);
-    });
-    if (prev) sel.value = prev;
-    browsePc = sel.value;
-    if (browsePc) { loadSelectedFromManifest(); reloadTree(); }
+    await renderBrowserFromManifest();
   } catch (e) { setBrowseStatus('load failed: ' + e.message, 'bad'); }
+}
+// Render the file-browser (PC dropdown + selected apps + tree) from the CURRENT
+// manifestObj — used by loadConfig AND "Load from version", so both tabs reflect
+// whatever was loaded.
+async function renderBrowserFromManifest() {
+  if (!manifestObj.pcs) manifestObj.pcs = {};
+  let agents = [];
+  try { agents = (await api('GET', '/pcs')).agents || []; } catch (e) {}
+  const sel = $('browsePc'), prev = sel.value;
+  sel.innerHTML = '';
+  const seen = new Set();
+  Object.keys(manifestObj.pcs).forEach(ip => {
+    seen.add(ip);
+    const o = document.createElement('option');
+    o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')';
+    sel.appendChild(o);
+  });
+  agents.filter(a => a.online && !seen.has(a.pc_ip)).forEach(a => {
+    const o = document.createElement('option');
+    o.value = a.pc_ip; o.textContent = a.pc_ip + ' — online, not in manifest';
+    sel.appendChild(o);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  browsePc = sel.value;
+  if (browsePc) { loadSelectedFromManifest(); reloadTree(); }
 }
 function browsePcChanged() { browsePc = $('browsePc').value; loadSelectedFromManifest(); reloadTree(); }
 
@@ -675,7 +677,9 @@ async function saveBrowserManifest() {
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
-showConfigTab('browser');  // default to the file browser
+showConfigTab('browser');  // default to the file browser (view only)
+loadConfig();              // load browser data once
+loadManifest();            // load YAML once (tab switches no longer reload)
 setInterval(refresh, 5000);
 </script>
 </body>
