@@ -75,8 +75,11 @@ def ensure_repo():
     if not cloned:
         config.WORK_CLONE.mkdir(parents=True, exist_ok=True)
         _git("init")
-        # Unborn HEAD -> master, so the first commit lands on master (spec ref).
-        _git("symbolic-ref", "HEAD", f"refs/heads/{config.MASTER}")
+    # Normalize an unborn HEAD to `master`, so the first commit lands on master
+    # (the spec ref). Cloning an EMPTY Forgejo repo otherwise leaves HEAD on git's
+    # default branch (`main`), which broke seal's `branch -f dev master`.
+    if _git("rev-parse", "--verify", "--quiet", "HEAD", check=False).returncode != 0:
+        _git("symbolic-ref", "HEAD", f"refs/heads/{config.MASTER}", check=False)
     # Fallback committer identity so annotated tags / commits never hard-fail on a
     # Pi without a global git identity. Per-op -c flags still override for attribution.
     _git("config", "user.name", "sim-coordinator", check=False)
