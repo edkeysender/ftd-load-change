@@ -228,8 +228,10 @@ def snapshot_dev(tag: str, message: str, author: str):
 
 
 def changed_files(base: str, head: str):
-    out = _git("diff", "--name-status", f"{base}..{head}").stdout.strip()
-    return [line.split("\t", 1) for line in out.splitlines() if line]
+    r = _git("diff", "--name-status", f"{base}..{head}", check=False)
+    if r.returncode != 0:
+        return []  # a ref doesn't exist yet (e.g. dev before seal)
+    return [line.split("\t", 1) for line in r.stdout.strip().splitlines() if line]
 
 
 def compare_url(base: str, head: str):

@@ -89,6 +89,19 @@
   </section>
 
   <section>
+    <h2>Compare</h2>
+    <div class="hint">What changed between two refs (versions, dev snapshots, or branches). Config shows line diffs in Forgejo; binaries (LFS) show as changed.</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <select id="compareBase"></select>
+      <span class="muted">→</span>
+      <select id="compareHead"></select>
+      <button onclick="compareRefs()">Compare</button>
+      <span id="compare-status" class="hint" style="margin:0"></span>
+    </div>
+    <div id="compareResult"></div>
+  </section>
+
+  <section>
     <h2>Dev session</h2>
     <div id="devlock" class="hint"></div>
     <div class="row-actions" style="margin-bottom:14px">
@@ -227,6 +240,7 @@ async function refresh() {
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
   if (devvers) renderDevVersions(devvers);
+  if (vers || devvers) populateCompare(vers, devvers);
   if (!scanning) { const d = await safe(api('GET', '/discover')); if (d) renderHosts(d); }
   $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
@@ -302,6 +316,44 @@ function renderDev(pcs, agents, lock, capProg) {
       <td><span class="pill ${(a.mode||'unseeded').toLowerCase()}">${esc(a.mode||'UNSEEDED')}</span></td>
       <td>${action}</td></tr>`;
   }).join('');
+}
+function populateCompare(vers, devvers) {
+  const refs = ['training-live', 'dev', 'master'];
+  ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
+  ((devvers && devvers.versions) || []).forEach(v => refs.push(v.tag));
+  [['compareBase', refs.find(r => r[0] === 'v') || 'master'], ['compareHead', 'dev']].forEach(([id, dflt]) => {
+    const sel = $(id), prev = sel.value;
+    sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
+    sel.value = (prev && refs.includes(prev)) ? prev : dflt;
+  });
+}
+const setCompareStatus = (m, c) => { const e = $('compare-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
+async function compareRefs() {
+  const base = $('compareBase').value, head = $('compareHead').value;
+  setCompareStatus('comparing…', '');
+  try {
+    const d = await api('GET', '/diff?base=' + encodeURIComponent(base) + '&head=' + encodeURIComponent(head));
+    setCompareStatus('', '');
+    renderCompare(d, base, head);
+  } catch (e) { setCompareStatus('failed: ' + e.message, 'bad'); $('compareResult').innerHTML = ''; }
+}
+function renderCompare(d, base, head) {
+  const changed = d.changed || [];
+  const link = d.compare_url ? `<a href="${esc(d.compare_url)}" target="_blank">Open side-by-side in Forgejo ↗</a>` : '';
+  if (!changed.length) {
+    $('compareResult').innerHTML = `<div class="muted">No differences between <code>${esc(base)}</code> and <code>${esc(head)}</code>. ${link}</div>`;
+    return;
+  }
+  const rows = changed.map(c => {
+    const st = (Array.isArray(c) ? c[0] : '').trim();
+    const path = Array.isArray(c) ? c[1] : c;
+    const label = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' }[st[0]] || st || 'changed';
+    const cls = st[0] === 'D' ? 'error' : (st[0] === 'A' ? 'training' : 'deploying');
+    return `<tr><td><span class="pill ${cls}" style="font-size:10px">${esc(label)}</span></td>
+      <td style="font-family:ui-monospace,monospace;font-size:12px">${esc(path)}</td></tr>`;
+  }).join('');
+  $('compareResult').innerHTML = `<div class="hint" style="margin-top:0">${changed.length} changed file(s) — ${link}</div>
+    <table><tbody>${rows}</tbody></table>`;
 }
 async function pollCapture(pc) {
   for (let i = 0; i < 1200; i++) {            // ~30 min cap at 1.5s
