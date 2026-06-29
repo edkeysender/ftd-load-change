@@ -79,7 +79,7 @@ def manifest_raw_save(req: ManifestRaw):
             raise HTTPException(400, f"pc {ip}: missing 'folder'")
         if not isinstance(spec.get("apps") or {}, dict):
             raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
-    config.MANIFEST_PATH.write_text(req.yaml)
+    git_ops.commit_manifest(req.yaml)
     return {"ok": True, "pcs": list(data["pcs"].keys())}
 
 
@@ -101,12 +101,21 @@ def manifest_json():
 
 @app.put("/manifest/json")
 def manifest_json_save(body: dict = Body(...)):
-    """Persist a manifest built by the UI (file browser). Dumped to YAML;
-    comments in the file are not preserved — use the raw editor to keep them."""
+    """Persist a manifest built by the UI (file browser). Dumped to YAML and
+    committed to dev (comments not preserved — use the raw editor to keep them)."""
     _validate_manifest(body)
-    config.MANIFEST_PATH.write_text(
+    git_ops.commit_manifest(
         yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True))
     return {"ok": True, "pcs": list(body["pcs"].keys())}
+
+
+@app.get("/manifest/at")
+def manifest_at(ref: str):
+    """The manifest as of a version/branch, for 'Load from version' in the editor."""
+    txt = git_ops.show_file(ref, "manifest.yaml")
+    if txt is None:
+        raise HTTPException(404, f"no manifest at {ref}")
+    return {"ref": ref, "yaml": txt, "manifest": yaml.safe_load(txt)}
 
 
 @app.on_event("startup")

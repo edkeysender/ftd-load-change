@@ -128,20 +128,17 @@
   </section>
 
   <section>
-    <h2>Discovery <button class="ghost" id="scanbtn" style="margin-left:auto" onclick="scan()">Scan LAN</button></h2>
-    <div class="hint">Ping-sweeps the subnet. <span class="ok">in manifest</span> / <span style="color:#1d7a59">has agent</span> show which machines are managed.</div>
-    <table>
-      <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Manifest</th><th>Agent</th><th>Listed</th><th></th></tr></thead>
-      <tbody id="hosts"></tbody>
-    </table>
-  </section>
-
-  <section>
     <h2>Configuration (manifest)
       <span style="margin-left:auto"></span>
       <button class="ghost" id="tabbtn-browser" onclick="showConfigTab('browser')">File browser</button>
       <button class="ghost" id="tabbtn-yaml" onclick="showConfigTab('yaml')">YAML</button>
     </h2>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span class="hint" style="margin:0">Load manifest from:</span>
+      <select id="loadVersionRef"></select>
+      <button class="ghost" onclick="loadManifestFromVersion()">Load</button>
+      <span class="hint" style="margin:0">— Save commits the manifest to <code>dev</code> (then Snapshot/Promote bake it into a version).</span>
+    </div>
 
     <div id="tab-browser">
       <div class="hint">Pick folders to <b>sync</b> per PC — check a folder to version it. No paths, no launch config (use the YAML tab for run/delay). Existing launch apps are preserved on save. (Needs the PC's agent online.)</div>
@@ -240,13 +237,19 @@ async function refresh() {
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
   if (devvers) renderDevVersions(devvers);
-  if (vers || devvers) populateCompare(vers, devvers);
-  if (!scanning) { const d = await safe(api('GET', '/discover')); if (d) renderHosts(d); }
+  if (vers || devvers) { populateCompare(vers, devvers); populateLoadVersion(vers, devvers); }
   $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
 
 function renderGrid(pcs, agents) {
-  $('grid').innerHTML = pcs.map(p => {
+  // Show every manifest PC AND every computer that has an agent (even if not yet
+  // in the manifest), so any agent shows up here by default.
+  const seen = new Set(pcs.map(p => p.ip));
+  const rows = pcs.slice();
+  Object.values(agents).forEach(a => {
+    if (a.pc_ip && !seen.has(a.pc_ip)) { rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip); }
+  });
+  $('grid').innerHTML = rows.map(p => {
     const a = agents[p.ip] || {};
     const mode = (a.mode || 'UNSEEDED');
     const clean = a.mode === 'TRAINING' ? (a.clean ? '<span class="ok">clean</span>' : '<span class="bad">dirty</span>') : '';
@@ -473,8 +476,30 @@ function setManifestStatus(msg, cls) {
   const e = $('manifest-status'); e.textContent = msg; e.className = 'hint ' + (cls || '');
 }
 async function loadManifest() {
-  try { $('manifest').value = (await api('GET', '/manifest/raw')).yaml || ''; setManifestStatus('loaded', ''); }
+  try { $('manifest').value = (await api('GET', '/manifest/raw')).yaml || ''; setManifestStatus('loaded (working draft)', ''); }
   catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); }
+}
+function populateLoadVersion(vers, devvers) {
+  const refs = ['training-live', 'dev', 'master'];
+  ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
+  ((devvers && devvers.versions) || []).forEach(v => refs.push(v.tag));
+  const sel = $('loadVersionRef'), prev = sel.value;
+  sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
+  if (prev && refs.includes(prev)) sel.value = prev;
+}
+async function loadManifestFromVersion() {
+  const ref = $('loadVersionRef').value;
+  try {
+    const d = await api('GET', '/manifest/at?ref=' + encodeURIComponent(ref));
+    manifestObj = d.manifest || { pcs: {} }; if (!manifestObj.pcs) manifestObj.pcs = {};
+    $('manifest').value = d.yaml || '';
+    // show the YAML tab WITHOUT reloading the working draft over what we just loaded
+    $('tab-browser').style.display = 'none'; $('tab-yaml').style.display = '';
+    $('tabbtn-yaml').style.background = '#2c2c2a'; $('tabbtn-yaml').style.color = '#fff';
+    $('tabbtn-browser').style.background = '#ece9e0'; $('tabbtn-browser').style.color = '#2c2c2a';
+    const s = $('browsePc'); if (s.value && manifestObj.pcs[s.value]) { browsePc = s.value; loadSelectedFromManifest(); }
+    setManifestStatus('loaded from ' + ref + ' — edit + Save commits to dev', 'ok');
+  } catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); toast('load failed: ' + e.message, true); }
 }
 async function saveManifest() {
   try {

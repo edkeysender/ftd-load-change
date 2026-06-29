@@ -224,6 +224,23 @@ def rollback(tag: str):
         return head_sha(config.TRAINING_LIVE)
 
 
+def commit_manifest(yaml_text: str, author: str = "config"):
+    """Persist a manifest edit. If dev exists, commit it there (the draft branch),
+    so Snapshot/Promote carry it into dev-N and v1.x. Before the first seal there's
+    no dev yet, so just write the working-tree file (sealed into v1.0 later)."""
+    with _WRITE_LOCK:
+        if _ref_exists("refs/heads/" + config.DEV_BRANCH):
+            _git("checkout", config.DEV_BRANCH)
+            (config.WORK_CLONE / "manifest.yaml").write_text(yaml_text)
+            _git("add", "manifest.yaml")
+            if _git("diff", "--cached", "--quiet", check=False).returncode != 0:
+                _git(*_ident(author), "commit", "-m", "config: update manifest")
+                _push(config.DEV_BRANCH)
+            return ref_sha(config.DEV_BRANCH)
+        (config.WORK_CLONE / "manifest.yaml").write_text(yaml_text)
+        return None
+
+
 def snapshot_dev(tag: str, message: str, author: str):
     """Tag the current dev tip as a named test version (dev-N) so admins have a
     list of testable builds to deploy to the sim before promoting."""
