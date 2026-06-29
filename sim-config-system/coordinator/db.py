@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS agents (
     mode         TEXT,              -- UNSEEDED | IDLE | TRAINING | DEV_TRACKING | DEPLOYING | CAPTURING | ERROR
     current_ref  TEXT,
     clean        INTEGER,           -- 1 = matches its ref, 0 = drifted
-    last_seen    REAL
+    last_seen    REAL,
+    version      TEXT               -- agent build version (git sha), from heartbeat
 );
 CREATE TABLE IF NOT EXISTS versions (
     tag        TEXT PRIMARY KEY,    -- v1.0, v1.1, ...
@@ -74,19 +75,26 @@ def init():
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with conn() as c:
         c.executescript(SCHEMA)
+        # Migration for DBs created before the agents.version column existed.
+        try:
+            c.execute("ALTER TABLE agents ADD COLUMN version TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 # --- agents -------------------------------------------------------------
-def upsert_agent(pc_ip, folder, mode, current_ref, clean):
+def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None):
+    # version is COALESCE'd so callers that don't know it (deploy-result) don't wipe it.
     with conn() as c:
         c.execute(
-            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(pc_ip) DO UPDATE SET
                  folder=excluded.folder, mode=excluded.mode,
                  current_ref=excluded.current_ref, clean=excluded.clean,
-                 last_seen=excluded.last_seen""",
-            (pc_ip, folder, mode, current_ref, int(clean), time.time()),
+                 last_seen=excluded.last_seen,
+                 version=COALESCE(excluded.version, agents.version)""",
+            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version),
         )
 
 

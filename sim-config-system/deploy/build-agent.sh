@@ -20,9 +20,11 @@ fi
 echo "[build] $(go version)"
 
 mkdir -p "$DIST"
-echo "[build] Cross-compiling -> windows/amd64 ..."
+VER=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo dev)
+echo "[build] Cross-compiling -> windows/amd64 (version $VER) ..."
 cd "$AGENT_DIR"
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$DIST/simagent.exe" .
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+  -ldflags "-X main.Version=$VER" -o "$DIST/simagent.exe" .
 
 echo ""
 echo "Built: $DIST/simagent.exe"

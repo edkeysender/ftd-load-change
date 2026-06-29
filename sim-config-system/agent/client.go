@@ -23,6 +23,7 @@ type Heartbeat struct {
 	Mode       string `json:"mode"`
 	CurrentRef string `json:"current_ref,omitempty"`
 	Clean      bool   `json:"clean"`
+	Version    string `json:"version,omitempty"`
 }
 
 func LoadConfig(path string) AgentConfig {
@@ -144,6 +145,25 @@ func (c *Client) DeployResult(pcIP, folder, mode, ref string, clean bool) {
 	if err == nil {
 		resp.Body.Close()
 	}
+}
+
+// DownloadBinary fetches the current agent build from the coordinator into dest.
+func (c *Client) DownloadBinary(dest string) error {
+	resp, err := c.do("GET", "/agent/binary", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
 }
 
 // BrowseResult returns a directory listing for a config-panel browse request.

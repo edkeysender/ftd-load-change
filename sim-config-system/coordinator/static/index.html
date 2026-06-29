@@ -61,9 +61,9 @@
 <div class="wrap">
 
   <section>
-    <h2>PC status</h2>
+    <h2>PC status <button class="ghost" style="margin-left:auto" onclick="updateAllAgents()">Update all agents</button></h2>
     <table>
-      <thead><tr><th>PC</th><th>Role</th><th>Online</th><th>Mode</th><th>Ref</th><th>State</th><th>Last seen</th></tr></thead>
+      <thead><tr><th>PC</th><th>Role</th><th>Online</th><th>Mode</th><th>Ref</th><th>State</th><th>Last seen</th><th>Agent</th></tr></thead>
       <tbody id="grid"></tbody>
     </table>
   </section>
@@ -231,8 +231,10 @@ function renderGrid(pcs, agents) {
       <td><span class="pill ${mode.toLowerCase()}">${esc(mode)}</span></td>
       <td>${esc(a.current_ref||'—')}</td>
       <td>${clean}</td>
-      <td class="muted">${ago(a.last_seen)}</td></tr>`;
-  }).join('') || '<tr><td colspan="7" class="muted">No PCs in manifest.</td></tr>';
+      <td class="muted">${ago(a.last_seen)}</td>
+      <td><span class="muted" style="font-size:11px">${esc(a.version||'—')}</span>
+          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="updateAgent('${esc(p.ip)}')">update</button></td></tr>`;
+  }).join('') || '<tr><td colspan="8" class="muted">No PCs in manifest.</td></tr>';
 }
 
 function renderVersions(v) {
@@ -306,6 +308,8 @@ const importPc = pc => act(() => api('POST', '/import/' + pc, {}), 'Import queue
 const sizeReport = pc => act(() => api('POST', '/import/' + pc + '/size-report', {}), 'Size report queued for ' + pc);
 const addHost   = ip => act(() => api('POST', '/discover/add', { ip }), ip + ' added to list');
 const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip + ' removed');
+const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Updating agent ' + ip + ' — it will download + relaunch');
+const updateAllAgents = () => confirm('Update + relaunch the agent on every PC?') && act(() => api('POST', '/agents/update', {}), 'Updating all agents');
 
 function promote() {
   const author = requireUser();

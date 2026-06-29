@@ -250,6 +250,32 @@ def deploy(req: DeployReq):
     return {"deploying": config.TRAINING_LIVE}
 
 
+# ---- remote agent self-update -----------------------------------------
+@app.get("/agent/binary")
+def agent_binary(authorization: str | None = Header(None)):
+    """Serve the current agent build (agents download this on `update`)."""
+    _auth(authorization)
+    if not config.AGENT_BINARY.exists():
+        raise HTTPException(404, "agent binary not built — run deploy/build-agent.sh")
+    return FileResponse(config.AGENT_BINARY, filename="simagent.exe",
+                        media_type="application/octet-stream")
+
+
+@app.post("/agents/{pc_ip}/update")
+def agent_update(pc_ip: str):
+    """Tell an agent to download the latest build and relaunch."""
+    manifest.enqueue(pc_ip, {"type": "update"})
+    return {"queued": True}
+
+
+@app.post("/agents/update")
+def agents_update_all():
+    """Update every PC in the manifest."""
+    for ip in manifest.load_manifest()["pcs"]:
+        manifest.enqueue(ip, {"type": "update"})
+    return {"queued": True}
+
+
 class DevStartReq(BaseModel):
     user: str
 
@@ -322,12 +348,13 @@ class Heartbeat(BaseModel):
     mode: str
     current_ref: str | None = None
     clean: bool = True
+    version: str | None = None
 
 
 @app.post("/agents/{pc_ip}/heartbeat")
 def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None)):
     _auth(authorization)
-    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean)
+    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version)
     return {"ok": True}
 
 

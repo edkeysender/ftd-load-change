@@ -21,6 +21,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SEED_MANIFEST = Path(os.environ.get("SIM_SEED_MANIFEST", str(_PROJECT_ROOT / "manifest.yaml")))
 SEED_GITIGNORE = Path(os.environ.get("SIM_SEED_GITIGNORE", str(_PROJECT_ROOT / "repo" / ".gitignore")))
 
+# Built agent binary served to agents for remote self-update (build-agent.sh output).
+AGENT_BINARY = Path(os.environ.get("SIM_AGENT_BINARY", str(_PROJECT_ROOT / "dist" / "simagent.exe")))
+
 # SQLite state DB.
 DB_PATH = Path(os.environ.get("SIM_DB", "/srv/sim-config/coordinator.db"))
 

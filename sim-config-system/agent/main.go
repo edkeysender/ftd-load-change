@@ -25,6 +25,7 @@ type Agent struct {
 }
 
 func main() {
+	cleanupOldBinary()              // remove leftover .old from a prior self-update
 	cfg := LoadConfig("agent.json") // TODO: also accept Windows service args
 	a := &Agent{cfg: cfg, state: StateUnseeded, api: NewClient(cfg), clean: true}
 	a.Run()
@@ -52,7 +53,7 @@ func (a *Agent) Run() {
 		}
 	}()
 
-	log.Printf("agent %s (%s) started in state %s", a.cfg.PCIP, a.cfg.Folder, a.state)
+	log.Printf("agent %s (%s) v%s started in state %s", a.cfg.PCIP, a.cfg.Folder, Version, a.state)
 
 	// Boot-time enforce: sync training-live and launch the apps BEFORE anything
 	// else runs. This is what guarantees apps never start before a full sync —
@@ -94,6 +95,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doCapture(c) // P3: quiesce -> mirror live->worktree -> upload bundle
 	case "browse":
 		a.doBrowse(c) // config panel: list a dir/drives (read-only, no state change)
+	case "update":
+		a.doUpdate(c) // download new build, swap exe, relaunch
 	default:
 		log.Printf("unknown command: %s", c.Type)
 	}
@@ -105,7 +108,7 @@ func (a *Agent) heartbeat() {
 	a.mu.Unlock()
 	a.api.Heartbeat(Heartbeat{
 		PCIP: a.cfg.PCIP, Folder: a.cfg.Folder,
-		Mode: string(st), CurrentRef: ref, Clean: clean,
+		Mode: string(st), CurrentRef: ref, Clean: clean, Version: Version,
 	})
 }
 
