@@ -112,6 +112,19 @@
     </table>
   </section>
 
+  <section>
+    <h2>Configuration (manifest)
+      <button class="ghost" style="margin-left:auto" onclick="loadManifest()">Reload</button>
+    </h2>
+    <div class="hint">Global sync config — which folders are versioned on each PC (live paths, repo, excludes, launch order). Edit here instead of per-machine. Takes effect immediately; baked into the next version on seal/promote.</div>
+    <textarea id="manifest" spellcheck="false"
+      style="width:100%;height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;resize:vertical;"></textarea>
+    <div class="row-actions" style="margin-top:10px;align-items:center">
+      <button onclick="saveManifest()">Save configuration</button>
+      <span id="manifest-status" class="hint" style="margin:0"></span>
+    </div>
+  </section>
+
 </div>
 <div id="toast"></div>
 
@@ -282,9 +295,26 @@ async function scan() {
   finally { scanning = false; $('scanbtn').disabled = false; $('scanbtn').textContent = 'Scan LAN'; }
 }
 
+// ---- configuration (manifest) editor ----
+function setManifestStatus(msg, cls) {
+  const e = $('manifest-status'); e.textContent = msg; e.className = 'hint ' + (cls || '');
+}
+async function loadManifest() {
+  try { $('manifest').value = (await api('GET', '/manifest/raw')).yaml || ''; setManifestStatus('loaded', ''); }
+  catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); }
+}
+async function saveManifest() {
+  try {
+    const r = await api('PUT', '/manifest/raw', { yaml: $('manifest').value });
+    setManifestStatus('saved ✓ — ' + (r.pcs || []).length + ' PCs', 'ok');
+    refresh();
+  } catch (e) { setManifestStatus('rejected: ' + e.message, 'bad'); }
+}
+
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
+loadManifest();            // load the manifest once (not on every refresh, so edits aren't clobbered)
 setInterval(refresh, 5000);
 </script>
 </body>

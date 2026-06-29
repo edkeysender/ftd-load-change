@@ -38,6 +38,37 @@ def manifest_pcs():
     return {"pcs": out}
 
 
+@app.get("/manifest/raw")
+def manifest_raw():
+    """Full manifest text for the config panel."""
+    p = config.MANIFEST_PATH
+    return {"yaml": p.read_text() if p.exists() else ""}
+
+
+class ManifestRaw(BaseModel):
+    yaml: str
+
+
+@app.put("/manifest/raw")
+def manifest_raw_save(req: ManifestRaw):
+    """Validate + persist the manifest (global sync config). Takes effect
+    immediately (read live); committed into the next version on seal/promote."""
+    import yaml as _yaml
+    try:
+        data = _yaml.safe_load(req.yaml)
+    except Exception as e:
+        raise HTTPException(400, f"YAML parse error: {e}")
+    if not isinstance(data, dict) or not isinstance(data.get("pcs"), dict):
+        raise HTTPException(400, "manifest must be a mapping with a 'pcs' mapping")
+    for ip, spec in data["pcs"].items():
+        if not isinstance(spec, dict) or "folder" not in spec:
+            raise HTTPException(400, f"pc {ip}: missing 'folder'")
+        if not isinstance(spec.get("apps") or {}, dict):
+            raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
+    config.MANIFEST_PATH.write_text(req.yaml)
+    return {"ok": True, "pcs": list(data["pcs"].keys())}
+
+
 @app.on_event("startup")
 def _startup():
     db.init()
