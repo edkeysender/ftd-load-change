@@ -20,6 +20,10 @@ _browse_requests: dict = {}
 _import_progress: dict = {}
 _capture_progress: dict = {}
 
+# PCs the operator asked to self-update; the agent checks this at startup (before
+# syncing) and on each poll, then acks to clear it (so no update loop).
+_update_pending: set = set()
+
 app = FastAPI(title="Sim Config Coordinator")
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -279,17 +283,32 @@ def agent_binary(authorization: str | None = Header(None)):
 
 @app.post("/agents/{pc_ip}/update")
 def agent_update(pc_ip: str):
-    """Tell an agent to download the latest build and relaunch."""
-    manifest.enqueue(pc_ip, {"type": "update"})
-    return {"queued": True}
+    """Mark an agent to self-update. It checks this at startup (before sync) and
+    on each poll, updates + relaunches, then acks to clear the flag."""
+    _update_pending.add(pc_ip)
+    return {"requested": True}
 
 
 @app.post("/agents/update")
 def agents_update_all():
-    """Update every PC in the manifest."""
+    """Mark every PC in the manifest to self-update."""
     for ip in manifest.load_manifest()["pcs"]:
-        manifest.enqueue(ip, {"type": "update"})
-    return {"queued": True}
+        _update_pending.add(ip)
+    return {"requested": True}
+
+
+@app.get("/agents/{pc_ip}/update-pending")
+def update_pending(pc_ip: str, authorization: str | None = Header(None)):
+    _auth(authorization)
+    return {"pending": pc_ip in _update_pending}
+
+
+@app.post("/agents/{pc_ip}/ack-update")
+def ack_update(pc_ip: str, authorization: str | None = Header(None)):
+    """Agent confirms it has consumed the update request (clears the flag)."""
+    _auth(authorization)
+    _update_pending.discard(pc_ip)
+    return {"ok": True}
 
 
 class DevStartReq(BaseModel):

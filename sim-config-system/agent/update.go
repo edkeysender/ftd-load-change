@@ -54,6 +54,7 @@ func (a *Agent) doUpdate(c Command) {
 		return
 	}
 
+	a.api.AckUpdate(a.cfg.PCIP) // clear the pending flag so we don't update-loop
 	log.Printf("[update] installed, relaunching...")
 	cmd := exec.Command(self)
 	cmd.Dir = filepath.Dir(self)

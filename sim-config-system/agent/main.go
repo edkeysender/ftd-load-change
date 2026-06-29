@@ -95,6 +95,10 @@ func (a *Agent) Run() {
 
 	log.Printf("agent %s (%s) v%s started in state %s", a.cfg.PCIP, a.cfg.Folder, Version, a.state)
 
+	// FIRST: if the operator clicked "update", self-update + relaunch BEFORE any
+	// sync, so the sync always runs on the latest agent.
+	a.checkAndUpdate()
+
 	// Boot-time enforce: sync training-live and launch the apps BEFORE anything
 	// else runs. This is what guarantees apps never start before a full sync —
 	// the agent owns the launch, so remove the apps from Windows auto-start.
@@ -108,6 +112,7 @@ func (a *Agent) Run() {
 	}
 
 	for {
+		a.checkAndUpdate() // react to an "update" click on a running agent too
 		cmd, err := a.api.PollCommand() // long-poll
 		if err != nil {
 			log.Printf("poll error: %v", err)
@@ -119,6 +124,17 @@ func (a *Agent) Run() {
 		}
 		a.dispatch(*cmd)
 	}
+}
+
+// checkAndUpdate self-updates (download new build, swap, relaunch) if the operator
+// requested it. doUpdate acks + restarts, so this never returns when it fires.
+func (a *Agent) checkAndUpdate() {
+	pending, err := a.api.UpdatePending()
+	if err != nil || !pending {
+		return
+	}
+	log.Printf("[update] update requested — updating before sync")
+	a.doUpdate(Command{})
 }
 
 func (a *Agent) dispatch(c Command) {

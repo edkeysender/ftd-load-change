@@ -394,8 +394,8 @@ const importPc = pc => bootstrapAction(pc, '/import/' + pc, 'Import');
 const sizeReport = pc => bootstrapAction(pc, '/import/' + pc + '/size-report', 'Size report');
 const addHost   = ip => act(() => api('POST', '/discover/add', { ip }), ip + ' added to list');
 const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip + ' removed');
-const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Updating agent ' + ip + ' — it will download + relaunch');
-const updateAllAgents = () => confirm('Update + relaunch the agent on every PC?') && act(() => api('POST', '/agents/update', {}), 'Updating all agents');
+const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Update requested for ' + ip + ' — agent self-updates within ~25s, or on next start, then syncs');
+const updateAllAgents = () => confirm('Request a self-update on every PC?') && act(() => api('POST', '/agents/update', {}), 'Update requested for all agents');
 
 function promote() {
   const author = requireUser();

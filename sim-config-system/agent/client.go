@@ -176,6 +176,31 @@ func (c *Client) DeployResult(pcIP, folder, mode, ref string, clean bool) {
 	}
 }
 
+// UpdatePending reports whether the operator asked this agent to self-update.
+func (c *Client) UpdatePending() (bool, error) {
+	resp, err := c.do("GET", "/agents/"+c.pcIP+"/update-pending", nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Pending bool `json:"pending"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, err
+	}
+	return out.Pending, nil
+}
+
+// AckUpdate clears the pending-update flag (called once the new binary is in
+// place) so the agent doesn't update-loop on the next startup.
+func (c *Client) AckUpdate(pcIP string) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/ack-update", map[string]any{})
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // DownloadBinary fetches the current agent build from the coordinator into dest.
 func (c *Client) DownloadBinary(dest string) error {
 	resp, err := c.do("GET", "/agent/binary", nil)
