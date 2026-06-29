@@ -112,20 +112,6 @@
 
   <div id="maintab-config" style="display:none;flex-direction:column">
 
-  <section style="order:3">
-    <h2>Dev session</h2>
-    <div id="devlock" class="hint"></div>
-    <div class="row-actions" style="margin-bottom:14px">
-      <button onclick="startDev()">Start dev session</button>
-      <button class="ghost" onclick="endDev()">End session</button>
-      <button class="warn" onclick="promote()">Promote dev → new version</button>
-    </div>
-    <table>
-      <thead><tr><th>PC</th><th>Mode</th><th></th></tr></thead>
-      <tbody id="devpcs"></tbody>
-    </table>
-  </section>
-
   <section style="order:2">
     <h2>Bootstrap</h2>
     <div class="hint">Import each PC read-only, review sizes, then seal <code>v1.0</code>. Missing live dirs are flagged for path reconciliation.</div>
@@ -134,7 +120,8 @@
       <tbody id="bootstrap"></tbody>
     </table>
     <div class="row-actions" style="margin-top:12px">
-      <button onclick="seal()">Create master (v1.0)</button>
+      <button id="btn-create-master" onclick="seal()">Create master (v1.0)</button>
+      <button id="btn-create-dev" style="display:none" onclick="snapshotDev()">Create dev version</button>
     </div>
   </section>
 
@@ -251,7 +238,6 @@ async function refresh() {
   if (mpcs) {
     MANIFEST = mpcs.pcs;
     renderGrid(MANIFEST, agents);
-    renderDev(MANIFEST, agents, pcs && pcs.dev_lock, pcs && pcs.capture_progress);
     if (boot) renderBootstrap(MANIFEST, boot);
   }
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
@@ -288,6 +274,12 @@ function renderGrid(pcs, agents) {
 
 function renderVersions(v) {
   const live = v.training_live_sha;
+  // Once at least one master (v1.x) exists, "Create master" is done — swap it for
+  // "Create dev version" (dev branch only exists after the first seal anyway).
+  const hasMaster = (v.versions || []).length > 0;
+  const cm = $('btn-create-master'), cd = $('btn-create-dev');
+  if (cm) cm.style.display = hasMaster ? 'none' : '';
+  if (cd) cd.style.display = hasMaster ? '' : 'none';
   $('versions').innerHTML = (v.versions || []).map(x => {
     const isLive = live && x.commit_sha && x.commit_sha === live;
     const tagCell = FORGEJO
@@ -318,28 +310,6 @@ function renderDevVersions(v) {
   }).join('') || '<tr><td colspan="5" class="muted">No dev test versions — capture changes, then "Snapshot dev".</td></tr>';
 }
 
-function renderDev(pcs, agents, lock, capProg) {
-  capProg = capProg || {};
-  $('devlock').innerHTML = lock
-    ? `Lock held by <b>${esc(lock)}</b> — agents track <code>dev</code>.`
-    : 'No active dev session.';
-  $('devpcs').innerHTML = pcs.map(p => {
-    const a = agents[p.ip] || {}, cp = capProg[p.ip];
-    let action;
-    if (cp && !cp.done) {
-      const pct = cp.total_bytes ? Math.min(100, Math.round(100 * cp.received_bytes / cp.total_bytes)) : 0;
-      action =
-        `<div style="font-size:12px">capturing… ${fmtBytes(cp.received_bytes)} / ${fmtBytes(cp.total_bytes)} (${pct}%)</div>` +
-        `<div style="background:#ece9e0;border-radius:6px;height:7px;width:150px;margin-top:3px;overflow:hidden">` +
-        `<div style="background:#99641a;height:100%;width:${pct}%;transition:width .3s"></div></div>`;
-    } else {
-      action = `<button class="ghost" ${lock ? '' : 'disabled'} onclick="capture('${esc(p.ip)}')">Capture</button>`;
-    }
-    return `<tr><td><b>${esc(p.ip)}</b> <span class="muted">${esc(p.folder||'')}</span></td>
-      <td><span class="pill ${(a.mode||'unseeded').toLowerCase()}">${esc(a.mode||'UNSEEDED')}</span></td>
-      <td>${action}</td></tr>`;
-  }).join('');
-}
 function populateCompare(vers, devvers) {
   const refs = ['training-live', 'dev', 'master'];
   ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
@@ -378,19 +348,6 @@ function renderCompare(d, base, head) {
   $('compareResult').innerHTML = `<div class="hint" style="margin-top:0">${changed.length} changed file(s) — ${link}</div>
     <table><tbody>${rows}</tbody></table>`;
 }
-async function pollCapture(pc) {
-  for (let i = 0; i < 1200; i++) {            // ~30 min cap at 1.5s
-    let d;
-    try { d = await api('GET', '/pcs'); } catch (e) { break; }
-    const agents = {}; (d.agents || []).forEach(a => agents[a.pc_ip] = a);
-    if (MANIFEST.length) renderDev(MANIFEST, agents, d.dev_lock, d.capture_progress);
-    const cp = (d.capture_progress || {})[pc];
-    if (cp && cp.done) { refresh(); break; }
-    if (!cp && i > 6) { refresh(); break; }
-    await new Promise(r => setTimeout(r, 1500));
-  }
-}
-
 function renderBootstrap(pcs, boot) {
   const imp = {}; (boot.imports || []).forEach(i => imp[i.pc_ip] = i);
   const sz = {}; (boot.sizes || []).forEach(s => sz[s.pc_ip] = s);
@@ -444,11 +401,6 @@ function snapshotDev() {
   if (!msg) return;
   act(() => api('POST', '/dev/snapshot', { message: msg, author }), 'Snapshotting dev → test version…');
 }
-const startDev = () => act(() => api('POST', '/dev/start', { user: requireUser() }), 'Dev session started');
-const endDev   = () => act(() => api('POST', '/dev/end', {}), 'Dev session ended');
-const capture  = pc => api('POST', '/dev/capture', { pc })
-  .then(() => { toast('Capturing ' + pc + ' — apps pause briefly…'); pollCapture(pc); })
-  .catch(e => toast(e.message, true));
 function bootstrapAction(pc, path, label) {
   api('POST', path, {})
     .then(() => { toast(label + ' running on ' + pc + '…'); pollBootstrap(pc); })
@@ -472,12 +424,6 @@ const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip +
 const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Update requested for ' + ip + ' — agent self-updates within ~25s, or on next start, then syncs');
 const updateAllAgents = () => confirm('Request a self-update on every PC?') && act(() => api('POST', '/agents/update', {}), 'Update requested for all agents');
 
-function promote() {
-  const author = requireUser();
-  const msg = prompt('Version message (what changed in dev)?');
-  if (!msg) return;
-  act(() => api('POST', '/promote', { message: msg, author }), 'Promoting → new version…');
-}
 function seal() {
   const author = requireUser();
   const msg = prompt('Baseline message for v1.0?', 'initial baseline');
