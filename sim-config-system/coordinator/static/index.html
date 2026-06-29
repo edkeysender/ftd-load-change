@@ -60,6 +60,13 @@
 
 <div class="wrap">
 
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button id="mtab-loads" onclick="showMainTab('loads')">Loads</button>
+    <button class="ghost" id="mtab-config" onclick="showMainTab('config')">Configuration</button>
+  </div>
+
+  <div id="maintab-loads">
+
   <section>
     <h2>PC status <button class="ghost" style="margin-left:auto" onclick="updateAllAgents()">Update all agents</button></h2>
     <table>
@@ -101,7 +108,11 @@
     <div id="compareResult"></div>
   </section>
 
-  <section>
+  </div><!-- /maintab-loads -->
+
+  <div id="maintab-config" style="display:none;flex-direction:column">
+
+  <section style="order:3">
     <h2>Dev session</h2>
     <div id="devlock" class="hint"></div>
     <div class="row-actions" style="margin-bottom:14px">
@@ -115,7 +126,7 @@
     </table>
   </section>
 
-  <section>
+  <section style="order:2">
     <h2>Bootstrap</h2>
     <div class="hint">Import each PC read-only, review sizes, then seal <code>v1.0</code>. Missing live dirs are flagged for path reconciliation.</div>
     <table>
@@ -127,17 +138,25 @@
     </div>
   </section>
 
-  <section>
-    <h2>Configuration (manifest)
+  <section style="order:1">
+    <h2>Configuration (manifest) <span id="newload-label" class="muted" style="font-size:11px;font-weight:400"></span>
       <span style="margin-left:auto"></span>
       <button class="ghost" id="tabbtn-browser" onclick="showConfigTab('browser')">File browser</button>
       <button class="ghost" id="tabbtn-yaml" onclick="showConfigTab('yaml')">YAML</button>
     </h2>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-      <span class="hint" style="margin:0">Load manifest from:</span>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <span class="hint" style="margin:0">Load from:</span>
       <select id="loadVersionRef"></select>
       <button class="ghost" onclick="loadManifestFromVersion()">Load</button>
-      <span class="hint" style="margin:0">— Save commits the manifest to <code>dev</code> (then Snapshot/Promote bake it into a version).</span>
+      <button onclick="startNewDevLoad()">NEW</button>
+      <span class="hint" style="margin:0">NEW = start a fresh dev load (next version); pick folders from the tree.</span>
+    </div>
+    <div class="row-actions" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:8px">
+      <button onclick="saveCurrentManifest()">Save</button>
+      <button class="ghost" onclick="saveAndCompare()">Save &amp; compare with</button>
+      <select id="compareWithRef"></select>
+      <button class="warn" onclick="deployAsDev()">Deploy as Dev</button>
+      <span id="config-status" class="hint" style="margin:0"></span>
     </div>
 
     <div id="tab-browser">
@@ -173,6 +192,8 @@
       </div>
     </div>
   </section>
+
+  </div><!-- /maintab-config -->
 
 </div>
 <div id="toast"></div>
@@ -483,9 +504,16 @@ function populateLoadVersion(vers, devvers) {
   const refs = ['training-live', 'dev', 'master'];
   ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
   ((devvers && devvers.versions) || []).forEach(v => refs.push(v.tag));
-  const sel = $('loadVersionRef'), prev = sel.value;
-  sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
-  if (prev && refs.includes(prev)) sel.value = prev;
+  ['loadVersionRef', 'compareWithRef'].forEach(id => {
+    const sel = $(id); if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
+    if (prev && refs.includes(prev)) sel.value = prev;
+  });
+  // next dev-N label
+  let n = 0;
+  ((devvers && devvers.versions) || []).forEach(v => { const m = /dev-(\d+)/.exec(v.tag); if (m) n = Math.max(n, +m[1]); });
+  nextDevTag = 'dev-' + (n + 1);
 }
 async function loadManifestFromVersion() {
   const ref = $('loadVersionRef').value;
@@ -507,6 +535,51 @@ async function saveManifest() {
 }
 
 // ---- configuration: file browser ----
+let nextDevTag = '';   // next dev-N label, computed from /dev/versions
+
+function showMainTab(t) {
+  $('maintab-loads').style.display = t === 'loads' ? '' : 'none';
+  $('maintab-config').style.display = t === 'config' ? 'flex' : 'none';
+  $('mtab-loads').className = t === 'loads' ? '' : 'ghost';
+  $('mtab-config').className = t === 'config' ? '' : 'ghost';
+}
+const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
+
+function startNewDevLoad() {
+  selectedApps = new Map(); renderSelected();
+  $('newload-label').textContent = '— new load: ' + (nextDevTag || 'dev-?');
+  setConfigStatus('New dev load — pick folders from the tree, then Save', '');
+  showConfigTab('browser');
+}
+function saveCurrentManifest() {
+  return ($('tab-yaml').style.display !== 'none') ? saveManifest() : saveBrowserManifest();
+}
+async function saveAndCompare() {
+  await saveCurrentManifest();
+  const base = $('compareWithRef').value;
+  try {
+    const d = await api('GET', '/diff?base=' + encodeURIComponent(base) + '&head=dev');
+    if ($('compareBase')) $('compareBase').value = base;
+    if ($('compareHead')) $('compareHead').value = 'dev';
+    renderCompare(d, base, 'dev');
+    showMainTab('loads');
+    $('compareResult').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { setConfigStatus('compare failed: ' + e.message, 'bad'); }
+}
+async function deployAsDev() {
+  const author = requireUser();
+  const feedback = prompt('Admin feedback — what does this dev load contain / what to test?');
+  if (!feedback) return;
+  try {
+    const snap = await api('POST', '/dev/snapshot', { message: feedback, author });
+    await api('POST', '/deploy', { ref: snap.tag });
+    setConfigStatus('deployed <b>' + esc(snap.tag) + '</b> to the sim', 'ok');
+    toast('Dev load ' + snap.tag + ' deployed to the sim');
+    $('newload-label').textContent = '';
+    refresh();
+  } catch (e) { setConfigStatus(e.message, 'bad'); toast(e.message, true); }
+}
+
 function showConfigTab(t) {
   $('tab-browser').style.display = t === 'browser' ? '' : 'none';
   $('tab-yaml').style.display = t === 'yaml' ? '' : 'none';
@@ -677,7 +750,8 @@ async function saveBrowserManifest() {
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
-showConfigTab('browser');  // default to the file browser (view only)
+showMainTab('loads');      // top-level tab
+showConfigTab('browser');  // default config sub-tab (view only)
 loadConfig();              // load browser data once
 loadManifest();            // load YAML once (tab switches no longer reload)
 setInterval(refresh, 5000);
