@@ -114,6 +114,13 @@ def list_agents():
     return rows
 
 
+def forget_agent(pc_ip):
+    """Drop an agent's registry row. A live agent re-registers on its next
+    heartbeat, so this only clears stale/renamed IPs for good."""
+    with conn() as c:
+        c.execute("DELETE FROM agents WHERE pc_ip=?", (pc_ip,))
+
+
 # --- dev-session lock ---------------------------------------------------
 def acquire_lock(user):
     with conn() as c:

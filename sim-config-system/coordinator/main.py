@@ -307,6 +307,14 @@ def agents_update_all():
     return {"requested": True}
 
 
+@app.post("/agents/{pc_ip}/forget")
+def agent_forget(pc_ip: str):
+    """Drop a PC's agent record from PC status. If that PC's agent is still alive
+    it re-registers on its next heartbeat (~10s); stale/renamed IPs stay gone."""
+    db.forget_agent(pc_ip)
+    return {"forgotten": pc_ip}
+
+
 @app.get("/agents/{pc_ip}/update-pending")
 def update_pending(pc_ip: str, authorization: str | None = Header(None)):
     _auth(authorization)

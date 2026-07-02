@@ -86,8 +86,7 @@
   </section>
 
   <section>
-    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
-      <button class="ghost" style="margin-left:auto" onclick="snapshotDev()">Create dev version</button></h2>
+    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span></h2>
     <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote to Master</b> to make one a customer training version.</div>
     <table>
       <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
@@ -160,7 +159,7 @@
           <div class="hint" style="margin-top:0">Will be versioned on this PC</div>
           <div id="selected"></div>
           <div class="row-actions" style="margin-top:12px;align-items:center">
-            <button onclick="saveBrowserManifest()">Save to manifest</button>
+            <button onclick="saveBrowserManifest()">Save to config</button>
             <span id="browser-save-status" class="hint" style="margin:0"></span>
           </div>
         </div>
@@ -268,7 +267,8 @@ function renderGrid(pcs, agents) {
       <td>${clean}</td>
       <td class="muted">${ago(a.last_seen)}</td>
       <td><span class="muted" style="font-size:11px">${esc(a.version||'—')}</span>
-          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="updateAgent('${esc(p.ip)}')">update</button></td></tr>`;
+          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="updateAgent('${esc(p.ip)}')">update</button>
+          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="forgetPc('${esc(p.ip)}')">remove</button></td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">No PCs in manifest.</td></tr>';
 }
 
@@ -435,6 +435,7 @@ const addHost   = ip => act(() => api('POST', '/discover/add', { ip }), ip + ' a
 const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip + ' removed');
 const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Update requested for ' + ip + ' — agent self-updates within ~25s, or on next start, then syncs');
 const updateAllAgents = () => confirm('Request a self-update on every PC?') && act(() => api('POST', '/agents/update', {}), 'Update requested for all agents');
+const forgetPc = ip => confirm('Remove ' + ip + ' from PC status? It reappears automatically if that PC\'s agent checks in again.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/forget', {}), ip + ' removed from PC status');
 
 function seal() {
   const author = requireUser();
