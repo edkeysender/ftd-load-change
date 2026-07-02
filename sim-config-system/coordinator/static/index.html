@@ -86,9 +86,9 @@
   </section>
 
   <section>
-    <h2>Dev test versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
-      <button class="ghost" style="margin-left:auto" onclick="snapshotDev()">Snapshot dev → test version</button></h2>
-    <div class="hint">Frozen <code>dev-N</code> snapshots to deploy to the sim for testing before promoting. Capture changes in the Dev panel first, then snapshot.</div>
+    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
+      <button class="ghost" style="margin-left:auto" onclick="snapshotDev()">Create dev version</button></h2>
+    <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote to Master</b> to make one a customer training version.</div>
     <table>
       <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
       <tbody id="devversions"></tbody>
@@ -113,7 +113,7 @@
   <div id="maintab-config" style="display:none;flex-direction:column">
 
   <section style="order:2">
-    <h2>Bootstrap</h2>
+    <h2>PC Images</h2>
     <div class="hint">Import each PC read-only, review sizes, then seal <code>v1.0</code>. Missing live dirs are flagged for path reconciliation.</div>
     <table>
       <thead><tr><th>PC</th><th>Imported</th><th>Size</th><th>Flags</th><th></th></tr></thead>
@@ -126,7 +126,7 @@
   </section>
 
   <section style="order:1">
-    <h2>Configuration (manifest) <span id="newload-label" class="muted" style="font-size:11px;font-weight:400"></span>
+    <h2>Sync Configuration <span id="newload-label" class="muted" style="font-size:11px;font-weight:400"></span>
       <span style="margin-left:auto"></span>
       <button class="ghost" id="tabbtn-browser" onclick="showConfigTab('browser')">File browser</button>
       <button class="ghost" id="tabbtn-yaml" onclick="showConfigTab('yaml')">YAML</button>
@@ -291,7 +291,7 @@ function renderVersions(v) {
       <td class="muted">${ago(x.created_at)}</td>
       <td class="row-actions">${isLive ? '<span class="muted">live</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">No versions yet — seal v1.0 in Bootstrap.</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">No versions yet — create v1.0 in PC Images.</td></tr>';
 }
 
 function renderDevVersions(v) {
@@ -310,17 +310,19 @@ function renderDevVersions(v) {
         <button class="warn" onclick="promoteDev('${esc(x.tag)}')">Promote to Master</button>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="5" class="muted">No dev test versions — create one in Bootstrap.</td></tr>';
+  }).join('') || '<tr><td colspan="5" class="muted">No dev versions yet — create one in PC Images or here.</td></tr>';
 }
 
 function populateCompare(vers, devvers) {
-  const refs = ['training-live', 'dev', 'master'];
-  ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
-  ((devvers && devvers.versions) || []).forEach(v => refs.push(v.tag));
-  [['compareBase', refs.find(r => r[0] === 'v') || 'master'], ['compareHead', 'dev']].forEach(([id, dflt]) => {
+  // Only named versions — training (v1.x) and dev builds (dev-v1.x). Raw branch
+  // refs (dev/master/training-live) are hidden; they meant nothing to admins.
+  const training = ((vers && vers.versions) || []).map(v => v.tag);
+  const dev = ((devvers && devvers.versions) || []).map(v => v.tag);
+  const refs = [...training, ...dev];
+  [['compareBase', training[0] || refs[0]], ['compareHead', dev[0] || training[0] || refs[0]]].forEach(([id, dflt]) => {
     const sel = $(id), prev = sel.value;
     sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
-    sel.value = (prev && refs.includes(prev)) ? prev : dflt;
+    sel.value = (prev && refs.includes(prev)) ? prev : (dflt || '');
   });
 }
 const setCompareStatus = (m, c) => { const e = $('compare-status'); e.textContent = m; e.className = 'hint ' + (c || ''); };
@@ -456,19 +458,24 @@ async function loadManifest() {
   catch (e) { setManifestStatus('load failed: ' + e.message, 'bad'); }
 }
 function populateLoadVersion(vers, devvers) {
-  const refs = ['training-live', 'dev', 'master'];
-  ((vers && vers.versions) || []).forEach(v => refs.push(v.tag));
-  ((devvers && devvers.versions) || []).forEach(v => refs.push(v.tag));
+  // Only named versions (training v1.x + dev builds dev-v1.x), no raw branches.
+  const training = ((vers && vers.versions) || []).map(v => v.tag);
+  const dev = ((devvers && devvers.versions) || []).map(v => v.tag);
+  const refs = [...training, ...dev];
   ['loadVersionRef', 'compareWithRef'].forEach(id => {
     const sel = $(id); if (!sel) return;
     const prev = sel.value;
     sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
     if (prev && refs.includes(prev)) sel.value = prev;
+    else if (id === 'compareWithRef') sel.value = training[0] || refs[0] || '';
   });
-  // next dev-N label
-  let n = 0;
-  ((devvers && devvers.versions) || []).forEach(v => { const m = /dev-(\d+)/.exec(v.tag); if (m) n = Math.max(n, +m[1]); });
-  nextDevTag = 'dev-' + (n + 1);
+  nextDevTag = 'dev-' + nextTrainingTag(training);  // dev build targets the next training version
+}
+// Next training version tag from the (newest-first) list — mirrors the coordinator.
+function nextTrainingTag(training) {
+  if (!training.length) return 'v1.0';
+  const [maj, min = '0'] = training[0].replace(/^v/, '').split('.');
+  return 'v' + maj + '.' + (parseInt(min, 10) + 1);
 }
 async function loadManifestFromVersion() {
   const ref = $('loadVersionRef').value;
@@ -491,7 +498,7 @@ async function saveManifest() {
 }
 
 // ---- configuration: file browser ----
-let nextDevTag = '';   // next dev-N label, computed from /dev/versions
+let nextDevTag = '';   // next dev-v1.x label, computed from /dev/versions
 
 function showMainTab(t) {
   $('maintab-loads').style.display = t === 'loads' ? '' : 'none';

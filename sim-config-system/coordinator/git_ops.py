@@ -247,12 +247,14 @@ def commit_manifest(yaml_text: str, author: str = "config"):
 
 
 def snapshot_dev(tag: str, message: str, author: str):
-    """Tag the current dev tip as a named test version (dev-N) so admins have a
-    list of testable builds to deploy to the sim before promoting."""
+    """Tag the current dev tip as a named test version (dev-v<next>) so admins have
+    a list of testable builds to deploy to the sim before promoting. Force (-f):
+    dev builds carry no numeric suffix, so re-snapshotting the same target version
+    moves the existing tag to the new tip instead of failing."""
     with _WRITE_LOCK:
         sha = head_sha(config.DEV_BRANCH)
-        _git(*_ident(author), "tag", "-a", tag, config.DEV_BRANCH, "-m", message)
-        _push(tag)
+        _git(*_ident(author), "tag", "-f", "-a", tag, config.DEV_BRANCH, "-m", message)
+        _push_force(tag)
         return sha
 
 

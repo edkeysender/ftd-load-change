@@ -174,14 +174,10 @@ def list_dev_versions():
 
 
 def next_dev_tag():
-    """Next dev-N tag (highest existing N + 1)."""
-    n = 0
-    for r in list_dev_versions():
-        try:
-            n = max(n, int(r["tag"].split("-", 1)[1]))
-        except (IndexError, ValueError):
-            pass
-    return f"dev-{n + 1}"
+    """A dev build is named after the training version it works toward:
+    dev-v<next>. One dev build per target version (re-snapshotting the same target
+    overwrites it), so no numeric suffix."""
+    return "dev-" + next_version_tag()
 
 
 # --- bootstrap: imports + size reports ----------------------------------
