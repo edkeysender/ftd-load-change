@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS size_reports (
     sizes       TEXT,               -- JSON: {app: bytes}
     reported_at REAL
 );
+CREATE TABLE IF NOT EXISTS dismissed_pcs (
+    pc_ip      TEXT PRIMARY KEY,    -- manually removed from PC status; cleared when
+    dismissed_at REAL               -- the agent next heartbeats (so it reappears)
+);
 CREATE TABLE IF NOT EXISTS discovered_hosts (
     ip         TEXT PRIMARY KEY,    -- host found on the LAN (or manually added)
     hostname   TEXT,
@@ -103,6 +107,8 @@ def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None):
                  version=COALESCE(excluded.version, agents.version)""",
             (pc_ip, folder, mode, current_ref, int(clean), time.time(), version),
         )
+        # A detected agent un-hides a PC that was manually removed from PC status.
+        c.execute("DELETE FROM dismissed_pcs WHERE pc_ip=?", (pc_ip,))
 
 
 def list_agents():
@@ -115,10 +121,18 @@ def list_agents():
 
 
 def forget_agent(pc_ip):
-    """Drop an agent's registry row. A live agent re-registers on its next
-    heartbeat, so this only clears stale/renamed IPs for good."""
+    """Remove a PC from PC status: drop its agent row AND mark it dismissed so it
+    stays hidden even if it's a manifest PC. The next heartbeat from that IP clears
+    the dismissal (see upsert_agent), so a live/returning agent reappears."""
     with conn() as c:
         c.execute("DELETE FROM agents WHERE pc_ip=?", (pc_ip,))
+        c.execute("INSERT OR REPLACE INTO dismissed_pcs (pc_ip, dismissed_at) VALUES (?,?)",
+                  (pc_ip, time.time()))
+
+
+def list_dismissed():
+    with conn() as c:
+        return [r["pc_ip"] for r in c.execute("SELECT pc_ip FROM dismissed_pcs")]
 
 
 # --- dev-session lock ---------------------------------------------------

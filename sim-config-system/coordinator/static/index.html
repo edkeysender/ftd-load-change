@@ -215,6 +215,7 @@ const fmtBytes = n => {
 const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let MANIFEST = [];   // [{ip, folder, role, apps}]
+let DISMISSED = [];  // PC IPs manually removed from PC status (hidden until agent returns)
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -228,6 +229,7 @@ async function refresh() {
     safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')), safe(api('GET', '/dev/versions')),
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
+  DISMISSED = (pcs && pcs.dismissed) || [];
   if (mpcs) {
     MANIFEST = mpcs.pcs;
     renderGrid(MANIFEST, agents);
@@ -242,11 +244,14 @@ async function refresh() {
 
 function renderGrid(pcs, agents) {
   // Show every manifest PC AND every computer that has an agent (even if not yet
-  // in the manifest), so any agent shows up here by default.
-  const seen = new Set(pcs.map(p => p.ip));
-  const rows = pcs.slice();
+  // in the manifest), so any agent shows up here by default. PCs manually removed
+  // from PC status (dismissed) are hidden until their agent heartbeats again.
+  const dismissed = new Set(DISMISSED);
+  const seen = new Set();
+  const rows = [];
+  pcs.forEach(p => { if (!dismissed.has(p.ip)) { rows.push(p); seen.add(p.ip); } });
   Object.values(agents).forEach(a => {
-    if (a.pc_ip && !seen.has(a.pc_ip)) { rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip); }
+    if (a.pc_ip && !seen.has(a.pc_ip) && !dismissed.has(a.pc_ip)) { rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip); }
   });
   $('grid').innerHTML = rows.map(p => {
     const a = agents[p.ip] || {};

@@ -157,7 +157,7 @@ def _enqueue_deploy_all():
 @app.get("/pcs")
 def pcs():
     return {"agents": db.list_agents(), "dev_lock": db.lock_holder(),
-            "capture_progress": _capture_progress}
+            "capture_progress": _capture_progress, "dismissed": db.list_dismissed()}
 
 
 @app.get("/versions")
