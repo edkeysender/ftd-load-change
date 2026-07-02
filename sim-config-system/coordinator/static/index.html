@@ -136,14 +136,6 @@
       <button onclick="startNewDevLoad()">NEW</button>
       <span class="hint" style="margin:0">Load = open an existing load · NEW = start a fresh dev load (pick from tree).</span>
     </div>
-    <div class="row-actions" style="margin-bottom:12px;align-items:center;flex-wrap:wrap;gap:8px">
-      <button onclick="saveCurrentManifest()">Save</button>
-      <button class="ghost" onclick="saveAndCompare()">Save &amp; compare with</button>
-      <select id="compareWithRef"></select>
-      <button class="warn" onclick="deployAsDev()">Deploy as Dev</button>
-      <span id="config-status" class="hint" style="margin:0"></span>
-    </div>
-
     <div id="tab-browser">
       <div class="hint">Pick folders to <b>sync</b> per PC — check a folder to version it. No paths, no launch config (use the YAML tab for run/delay). Existing launch apps are preserved on save. (Needs the PC's agent online.)</div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
@@ -158,9 +150,11 @@
         <div style="flex:1 1 320px;min-width:0">
           <div class="hint" style="margin-top:0">Will be versioned — all PCs in this load</div>
           <div id="selected"></div>
-          <div class="row-actions" style="margin-top:12px;align-items:center">
+          <div class="row-actions" style="margin-top:12px;align-items:center;flex-wrap:wrap;gap:8px">
             <button onclick="saveBrowserManifest()">Save to config</button>
+            <button class="warn" onclick="deployAsDev()">Deploy as Dev</button>
             <span id="browser-save-status" class="hint" style="margin:0"></span>
+            <span id="config-status" class="hint" style="margin:0"></span>
           </div>
         </div>
       </div>
@@ -463,13 +457,12 @@ function populateLoadVersion(vers, devvers) {
   const training = ((vers && vers.versions) || []).map(v => v.tag);
   const dev = ((devvers && devvers.versions) || []).map(v => v.tag);
   const refs = [...training, ...dev];
-  ['loadVersionRef', 'compareWithRef'].forEach(id => {
-    const sel = $(id); if (!sel) return;
+  const sel = $('loadVersionRef');
+  if (sel) {
     const prev = sel.value;
     sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
     if (prev && refs.includes(prev)) sel.value = prev;
-    else if (id === 'compareWithRef') sel.value = training[0] || refs[0] || '';
-  });
+  }
   nextDevTag = 'dev-' + nextTrainingTag(training);  // dev build targets the next training version
 }
 // Next training version tag from the (newest-first) list — mirrors the coordinator.
@@ -527,21 +520,6 @@ function startNewDevLoad() {
   setConfigStatus('New dev load — pick folders per PC (switch PCs to add more), then Save', '');
   showConfigTab('browser');
   reloadTree();
-}
-function saveCurrentManifest() {
-  return ($('tab-yaml').style.display !== 'none') ? saveManifest() : saveBrowserManifest();
-}
-async function saveAndCompare() {
-  await saveCurrentManifest();
-  const base = $('compareWithRef').value;
-  try {
-    const d = await api('GET', '/diff?base=' + encodeURIComponent(base) + '&head=dev');
-    if ($('compareBase')) $('compareBase').value = base;
-    if ($('compareHead')) $('compareHead').value = 'dev';
-    renderCompare(d, base, 'dev');
-    showMainTab('loads');
-    $('compareResult').scrollIntoView({ behavior: 'smooth' });
-  } catch (e) { setConfigStatus('compare failed: ' + e.message, 'bad'); }
 }
 async function deployAsDev() {
   const author = requireUser();
