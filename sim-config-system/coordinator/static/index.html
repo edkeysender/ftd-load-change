@@ -156,7 +156,7 @@
           <div id="tree"></div>
         </div>
         <div style="flex:1 1 320px;min-width:0">
-          <div class="hint" style="margin-top:0">Will be versioned on this PC</div>
+          <div class="hint" style="margin-top:0">Will be versioned — all PCs in this load</div>
           <div id="selected"></div>
           <div class="row-actions" style="margin-top:12px;align-items:center">
             <button onclick="saveBrowserManifest()">Save to config</button>
@@ -684,23 +684,64 @@ function toggleSelect(entry, checked) {
 }
 function renderSelected() {
   const box = $('selected');
-  if (!selectedApps.size) { box.innerHTML = '<div class="muted" style="font-size:13px">Check folders in the tree to sync them.</div>'; return; }
-  box.innerHTML = '';
-  for (const [path, m] of selectedApps) {
-    const card = document.createElement('div');
-    card.style.cssText = 'border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px';
-    card.innerHTML =
-      '<div style="min-width:0">' +
-        '<b>' + esc(m.name) + '</b>' + (m.launch ? ' <span class="muted" style="font-size:10px">(launch app — kept)</span>' : '') +
-        '<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">' + esc(path) + '</div></div>' +
-      '<button class="ghost" data-rm="1">remove</button>';
-    card.querySelector('[data-rm]').onclick = () => {
-      selectedApps.delete(path); renderSelected();
-      const cb = document.querySelector('#tree input[data-path="' + path.replace(/"/g, '\\"') + '"]');
-      if (cb) cb.checked = false;
-    };
-    box.appendChild(card);
+  // One combined view of the whole load: the PC on screen from the live tree
+  // selection, every other PC from what was flushed into manifestObj.
+  const ips = new Set(Object.keys(manifestObj.pcs || {}));
+  if (browsePc) ips.add(browsePc);
+  const groups = [];
+  for (const ip of ips) {
+    const folder = (manifestObj.pcs[ip] || {}).folder || '';
+    const items = [];
+    if (ip === browsePc) {
+      for (const [path, m] of selectedApps) items.push({ key: m.name, name: m.name, path, launch: !!m.launch });
+    } else {
+      const apps = (manifestObj.pcs[ip] || {}).apps || {};
+      for (const [key, a] of Object.entries(apps)) {
+        items.push({ key, name: key, path: (a.live && a.live[0]) || '', launch: !!a.run });
+      }
+    }
+    if (items.length) groups.push({ ip, folder, items, current: ip === browsePc });
   }
+  if (!groups.length) {
+    box.innerHTML = '<div class="muted" style="font-size:13px">Check folders in the tree to sync them. Switch PCs to add more — every PC\'s picks show here.</div>';
+    return;
+  }
+  groups.sort((a, b) => (b.current - a.current) || a.ip.localeCompare(b.ip)); // PC being edited first
+  box.innerHTML = '';
+  for (const g of groups) {
+    const sec = document.createElement('div');
+    sec.style.cssText = 'margin-bottom:12px';
+    const head = document.createElement('div');
+    head.style.cssText = 'font-size:12px;font-weight:600;color:#2c2c2a;margin:4px 0 6px;padding-bottom:3px;border-bottom:1px solid #ece9e0';
+    head.innerHTML = esc(g.ip) +
+      (g.folder ? ' <span class="muted" style="font-weight:400">' + esc(g.folder) + '</span>' : '') +
+      (g.current ? ' <span class="muted" style="font-weight:400;font-size:10px">(editing)</span>' : '');
+    sec.appendChild(head);
+    for (const it of g.items) {
+      const card = document.createElement('div');
+      card.style.cssText = 'border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:8px';
+      card.innerHTML =
+        '<div style="min-width:0">' +
+          '<b>' + esc(it.name) + '</b>' + (it.launch ? ' <span class="muted" style="font-size:10px">(launch app — kept)</span>' : '') +
+          '<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">' + esc(it.path) + '</div></div>' +
+        '<button class="ghost" data-rm="1">remove</button>';
+      card.querySelector('[data-rm]').onclick = () => removeSelected(g.ip, it.key, it.path);
+      sec.appendChild(card);
+    }
+    box.appendChild(sec);
+  }
+}
+// Remove one folder from the load. On the current PC it's a live tree pick;
+// on another PC it lives in manifestObj until saved.
+function removeSelected(ip, key, path) {
+  if (ip === browsePc) {
+    selectedApps.delete(path);
+    const cb = document.querySelector('#tree input[data-path="' + path.replace(/"/g, '\\"') + '"]');
+    if (cb) cb.checked = false;
+  } else if (manifestObj.pcs[ip] && manifestObj.pcs[ip].apps) {
+    delete manifestObj.pcs[ip].apps[key];
+  }
+  renderSelected();
 }
 // Persist the CURRENT PC's tree selection into manifestObj (in memory), so picks
 // survive a PC switch and Save can cover every PC — not just the one on screen.
