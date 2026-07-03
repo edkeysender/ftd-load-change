@@ -641,8 +641,9 @@ function makeNode(entry, depth) {
     };
     row.appendChild(tog);
     const cb = document.createElement('input'); cb.type = 'checkbox';
-    cb.checked = selectedApps.has(entry.path);
     cb.dataset.path = entry.path;
+    if (selectedApps.has(entry.path)) { cb.checked = true; }
+    else if (selectedAncestorOf(entry.path)) { cb.checked = true; cb.disabled = true; } // covered by a checked parent
     cb.onchange = () => toggleSelect(entry, cb.checked);
     row.appendChild(cb);
   } else {
@@ -659,11 +660,42 @@ function makeNode(entry, depth) {
   wrap.appendChild(row); wrap.appendChild(kids);
   return wrap;
 }
+// A selected folder is synced recursively, so it implies everything beneath it.
+// Return a selected key that is a strict ancestor of `path`, or null.
+function selectedAncestorOf(path) {
+  const p = (path || '').replace(/\/+$/, '');
+  for (const k of selectedApps.keys()) {
+    const base = k.replace(/\/+$/, '');
+    if (base !== p && p.startsWith(base + '/')) return k;
+  }
+  return null;
+}
 function toggleSelect(entry, checked) {
+  const path = entry.path;
   if (checked) {
-    if (!selectedApps.has(entry.path)) selectedApps.set(entry.path, { name: appKey(entry.name) });
-  } else selectedApps.delete(entry.path);
+    // Checking a folder covers all its children — drop any now-redundant descendant
+    // picks so the manifest keeps just the top folder.
+    const base = path.replace(/\/+$/, '');
+    for (const k of [...selectedApps.keys()]) {
+      if (k !== path && k.replace(/\/+$/, '').startsWith(base + '/')) selectedApps.delete(k);
+    }
+    if (!selectedApps.has(path)) selectedApps.set(path, { name: appKey(entry.name) });
+  } else {
+    selectedApps.delete(path);
+  }
+  refreshTreeChecks();
   renderSelected();
+}
+// Reflect the selection across every rendered checkbox: an explicitly-picked folder
+// is checked + editable; a folder under a checked parent is checked + disabled
+// (included via the parent); everything else is unchecked.
+function refreshTreeChecks() {
+  document.querySelectorAll('#tree input[type=checkbox]').forEach(cb => {
+    const p = cb.dataset.path; if (!p) return;
+    if (selectedApps.has(p)) { cb.checked = true; cb.disabled = false; }
+    else if (selectedAncestorOf(p)) { cb.checked = true; cb.disabled = true; }
+    else { cb.checked = false; cb.disabled = false; }
+  });
 }
 function renderSelected() {
   const box = $('selected');
@@ -719,8 +751,7 @@ function renderSelected() {
 function removeSelected(ip, key, path) {
   if (ip === browsePc) {
     selectedApps.delete(path);
-    const cb = document.querySelector('#tree input[data-path="' + path.replace(/"/g, '\\"') + '"]');
-    if (cb) cb.checked = false;
+    refreshTreeChecks();  // re-enable any children that were implied by this folder
   } else if (manifestObj.pcs[ip] && manifestObj.pcs[ip].apps) {
     delete manifestObj.pcs[ip].apps[key];
   }
