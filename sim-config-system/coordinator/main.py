@@ -421,7 +421,7 @@ def guards():
 
 @app.put("/installs/asset/{name}")
 async def upload_asset(name: str, request: Request):
-    """Upload a guard/install asset (e.g. wallpaper.png) from the dashboard — the raw
+    """Upload/replace a guard asset (e.g. wallpaper.png) from the dashboard — the raw
     file body is saved into the installs dir under `name`."""
     if "/" in name or "\\" in name or ".." in name:
         raise HTTPException(400, "bad name")
@@ -429,6 +429,17 @@ async def upload_asset(name: str, request: Request):
     data = await request.body()
     (config.INSTALLS_DIR / name).write_bytes(data)
     return {"ok": True, "name": name, "bytes": len(data)}
+
+
+@app.get("/installs/asset/{name}")
+def get_asset(name: str):
+    """Serve a guard asset for the dashboard preview (e.g. the wallpaper image)."""
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "bad name")
+    p = config.INSTALLS_DIR / name
+    if not p.exists():
+        raise HTTPException(404, "asset not found")
+    return FileResponse(p, filename=name)
 
 
 @app.get("/guards/file/{name}")

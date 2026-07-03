@@ -1,24 +1,36 @@
-# Apply the standard desktop wallpaper AND the lock-screen / login image.
-# Desktop is per-user (HKCU); lock screen is machine policy (HKLM, needs admin).
+# Copy the standard wallpaper to the PC and set it as the desktop background AND the
+# login / lock-screen image. Desktop is applied live via SystemParametersInfo (works
+# for the session the agent runs in); login image is a machine policy (needs admin).
 $ErrorActionPreference = 'Stop'
 $src = Join-Path $env:SIM_ASSETS 'wallpaper.png'
-if (-not (Test-Path $src)) { Write-Output 'wallpaper.png not provided (put it in the coordinator installs dir)'; exit 1 }
-$dir = 'C:\ProgramData\sim'
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$managed = Join-Path $dir 'wallpaper.png'
-Copy-Item $src $managed -Force
+if (-not (Test-Path $src)) { Write-Output 'wallpaper.png not provided (upload it in the dashboard)'; exit 1 }
 
-# --- Desktop wallpaper (current user) ---
-Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $managed
+$dir = 'D:\libraries\Pictures'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$dest = Join-Path $dir 'wallpaper.png'
+Copy-Item $src $dest -Force
+
+# --- Desktop background (live, current session) ---
+Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name Wallpaper -Value $dest
 Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name WallpaperStyle -Value 10  # 10 = fill
 Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name TileWallpaper -Value 0
-rundll32.exe user32.dll, UpdatePerUserSystemParameters 1, True
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices;
+public class SimWp {
+  [DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+  public static extern bool SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+}
+"@
+# SPI_SETDESKWALLPAPER = 20 ; SPIF_UPDATEINIFILE(1) | SPIF_SENDWININICHANGE(2) = 3
+$applied = [SimWp]::SystemParametersInfo(20, 0, $dest, 3)
 
-# --- Lock screen / login image (machine-wide) ---
+# --- Login / lock-screen image (machine-wide policy; needs admin) ---
+$loginNote = ''
 try {
   $ls = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
   New-Item -Path $ls -Force | Out-Null
-  Set-ItemProperty $ls -Name LockScreenImage -Value $managed
-} catch { Write-Output "desktop set; lock screen needs admin: $($_.Exception.Message)"; exit 0 }
+  Set-ItemProperty $ls -Name LockScreenImage -Value $dest
+} catch { $loginNote = " (login image needs admin: $($_.Exception.Message))" }
 
-Write-Output 'wallpaper + login image applied'; exit 0
+if ($applied) { Write-Output "wallpaper set to $dest$loginNote"; exit 0 }
+Write-Output "copied to $dest but SystemParametersInfo failed$loginNote"; exit 1

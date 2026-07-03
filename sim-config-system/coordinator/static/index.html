@@ -587,14 +587,29 @@ function renderGuards(data, agents) {
     el.innerHTML = '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>';
     return;
   }
-  // Missing assets (e.g. wallpaper.png) — upload once from here.
-  const missing = {};
-  guards.forEach(g => (g.assets_missing || []).forEach(a => { missing[a] = g.name; }));
-  const missHdr = Object.keys(missing).length
-    ? '<div style="border:1px solid #f0d9a0;background:#fdf6e6;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px">' +
-      '⚠ Upload missing asset(s): ' +
-      Object.entries(missing).map(([a, gn]) => '<label style="margin-right:14px"><b>' + esc(a) + '</b> <span class="muted">(' + esc(gn) + ')</span> <input type="file" style="font-size:11px" onchange="uploadAsset(\'' + esc(a) + '\',this)"></label>').join('') +
-      '</div>' : '';
+  // Assets (wallpaper image, git bundle, …): preview, upload, or replace.
+  const assetMap = {};
+  guards.forEach(g => {
+    const miss = new Set(g.assets_missing || []);
+    (g.assets || []).forEach(a => { if (!(a in assetMap)) assetMap[a] = { guard: g.name, missing: miss.has(a) }; });
+  });
+  const assetRows = Object.entries(assetMap).map(([name, info]) => {
+    const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+    const url = '/installs/asset/' + encodeURIComponent(name) + '?t=' + Date.now();
+    let thumb;
+    if (info.missing) thumb = '<span class="bad" style="font-size:11px">missing</span>';
+    else if (isImg) thumb = `<img src="${url}" onclick="enlargeImg('${esc(url)}')" style="height:38px;border:1px solid #ccc;border-radius:4px;cursor:zoom-in;vertical-align:middle">`;
+    else thumb = '<span class="ok" style="font-size:11px">present</span>';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0">
+      <span style="width:46px;text-align:center">${thumb}</span>
+      <b>${esc(name)}</b> <span class="muted" style="font-size:11px">(${esc(info.guard)})</span>
+      <label style="margin-left:auto;font-size:11px">${info.missing ? 'Upload' : 'Replace'} <input type="file" style="font-size:11px" onchange="uploadAsset('${esc(name)}',this)"></label>
+    </div>`;
+  }).join('');
+  const missHdr = assetRows
+    ? `<div style="border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin-bottom:10px">
+         <div class="hint" style="margin:0 0 4px">Assets — click an image to enlarge; Replace to change it.</div>${assetRows}</div>`
+    : '';
   const online = Object.values(agents || {}).filter(a => a.online);
   if (!online.length) { el.innerHTML = missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
   // Auto-run the checks once per PC per session so the checklist populates.
@@ -631,6 +646,11 @@ function applyGuard(ip, id) {
 }
 function recheckGuards(ip) {
   act(() => api('POST', '/guard/check-all', { pc: ip }), 'Re-checking ' + ip + '…');
+}
+function enlargeImg(url) {
+  $('drift-title').textContent = 'Preview';
+  $('drift-body').innerHTML = '<img src="' + esc(url) + '" style="max-width:100%;max-height:72vh;border-radius:8px;display:block;margin:0 auto">';
+  $('drift-modal').style.display = 'flex';
 }
 async function uploadAsset(name, input) {
   const f = input.files && input.files[0];
