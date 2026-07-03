@@ -111,9 +111,9 @@
 
   <div id="maintab-config" style="display:none;flex-direction:column">
 
-  <section style="order:2">
+  <section id="pc-images-section" style="order:2">
     <h2>PC Images</h2>
-    <div class="hint">Import each PC read-only, review sizes, then seal <code>v1.0</code>. Missing live dirs are flagged for path reconciliation.</div>
+    <div class="hint">First-time setup: import each PC read-only, review sizes, then seal <code>v1.0</code>. After that, import content per dev load in Sync Configuration above.</div>
     <table>
       <thead><tr><th>PC</th><th>Imported</th><th>Size</th><th>Flags</th><th></th></tr></thead>
       <tbody id="bootstrap"></tbody>
@@ -301,6 +301,10 @@ function renderVersions(v) {
   const cm = $('btn-create-master'), cd = $('btn-create-dev');
   if (cm) cm.style.display = hasMaster ? 'none' : '';
   if (cd) cd.style.display = hasMaster ? '' : 'none';
+  // Once v1.0 is sealed, the dev-version stepper handles imports — PC Images
+  // (bootstrap only) would just duplicate it, so hide it.
+  const pcimg = $('pc-images-section');
+  if (pcimg) pcimg.style.display = hasMaster ? 'none' : '';
   $('versions').innerHTML = (v.versions || []).map(x => {
     const isLive = live && x.commit_sha && x.commit_sha === live;
     const tagCell = FORGEJO
