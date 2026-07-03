@@ -17,11 +17,12 @@ type Agent struct {
 	cfg AgentConfig
 	api *Client
 
-	mu    sync.Mutex          // guards the fields below (read by heartbeat goroutine)
-	state State               //
-	apps  map[string]AppSpec  // app specs from the last deploy/track command
-	ref   string              // the ref currently enforced (training-live / dev / tag)
-	clean bool                // cached drift status vs the deployed ref
+	mu     sync.Mutex         // guards the fields below (read by heartbeat goroutine)
+	state  State              //
+	apps   map[string]AppSpec // app specs from the last deploy/track command
+	ref    string             // the ref currently enforced (training-live / dev / tag)
+	clean  bool               // cached drift status vs the deployed ref
+	errMsg string             // last failure message (shown in the dashboard on ERROR)
 }
 
 func main() {
@@ -162,18 +163,22 @@ func (a *Agent) dispatch(c Command) {
 
 func (a *Agent) heartbeat() {
 	a.mu.Lock()
-	st, ref, clean := a.state, a.ref, a.clean
+	st, ref, clean, errMsg := a.state, a.ref, a.clean, a.errMsg
 	a.mu.Unlock()
 	a.api.Heartbeat(Heartbeat{
 		PCIP: a.cfg.PCIP, Folder: a.cfg.Folder,
-		Mode: string(st), CurrentRef: ref, Clean: clean, Version: Version,
+		Mode: string(st), CurrentRef: ref, Clean: clean, Version: Version, Error: errMsg,
 	})
 }
 
-// setState / remember keep the shared fields consistent under the lock.
+// setState / remember keep the shared fields consistent under the lock. Leaving the
+// ERROR state (a later command succeeds) clears the stored failure message.
 func (a *Agent) setState(s State) {
 	a.mu.Lock()
 	a.state = s
+	if s != StateError {
+		a.errMsg = ""
+	}
 	a.mu.Unlock()
 }
 

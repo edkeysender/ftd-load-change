@@ -29,6 +29,9 @@ _deploy_progress: dict = {}
 # How long the last successful deploy took per PC (seconds) — projects % + ETA.
 _last_deploy_dur: dict = {}
 
+# Last error message reported by each agent (cleared when it leaves ERROR).
+_agent_errors: dict = {}
+
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
 _update_pending: set = set()
@@ -186,7 +189,10 @@ def pcs():
         if d.get("state") == "syncing":
             v["elapsed"] = now - d.get("at", now)  # server-computed, no clock-sync needed
         dp_view[ip] = v
-    return {"agents": db.list_agents(), "dev_lock": db.lock_holder(),
+    agents = db.list_agents()
+    for a in agents:
+        a["error"] = _agent_errors.get(a["pc_ip"])  # last failure message, if any
+    return {"agents": agents, "dev_lock": db.lock_holder(),
             "capture_progress": _capture_progress, "dismissed": db.list_dismissed(),
             "deploy_progress": dp_view}
 
@@ -503,15 +509,18 @@ class Heartbeat(BaseModel):
     current_ref: str | None = None
     clean: bool = True
     version: str | None = None
+    error: str | None = None
 
 
 @app.post("/agents/{pc_ip}/heartbeat")
 def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None)):
     _auth(authorization)
     db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version)
+    _agent_errors[hb.pc_ip] = hb.error if (hb.mode == "ERROR" and hb.error) else None
     dp = _deploy_progress.get(hb.pc_ip)
     if dp and dp.get("state") == "syncing" and hb.mode == "ERROR":
-        _deploy_progress[hb.pc_ip] = {"state": "fail", "at": time.time()}  # deploy failed
+        _deploy_progress[hb.pc_ip] = {"state": "fail", "at": time.time(),
+                                      "error": hb.error}  # deploy failed
     return {"ok": True}
 
 

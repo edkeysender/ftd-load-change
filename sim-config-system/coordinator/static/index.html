@@ -253,6 +253,7 @@ let LIVE = { tag: '', kind: 'TRAINING' };  // version training-live points at + 
 let DEPLOYPROG = {};  // per-PC sync state for the current deploy
 let LAST_READY = null, LAST_PROG = {};  // last dev-stepper inputs, for on-demand re-render
 const importStarting = new Set();  // PCs where Import was clicked but upload hasn't begun
+let AGENT_ERRORS = {};  // pc_ip -> last agent error message (for the ERROR pill)
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -267,6 +268,7 @@ async function refresh() {
     safe(api('GET', '/dev/readiness')),
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
+  AGENT_ERRORS = {}; ((pcs && pcs.agents) || []).forEach(a => { if (a.error) AGENT_ERRORS[a.pc_ip] = a.error; });
   DISMISSED = (pcs && pcs.dismissed) || [];
   DEPLOYPROG = (pcs && pcs.deploy_progress) || {};
   // Resolve what training-live currently points at, so PC status shows the real
@@ -320,7 +322,9 @@ function renderGrid(pcs, agents) {
       <td><b>${esc(p.ip)}</b><br><span class="muted">${esc(p.folder||'')}</span></td>
       <td>${esc(p.role||'')}</td>
       <td><span class="dot ${a.online?'on':'off'}"></span>${a.online?'online':'offline'}</td>
-      <td><span class="pill ${mode.toLowerCase()}">${esc(mode)}</span></td>
+      <td>${(a.mode === 'ERROR' && a.error)
+        ? `<span class="pill error" style="cursor:pointer" title="Click to see the error" onclick="showAgentError('${esc(p.ip)}')">ERROR ⚠</span>`
+        : `<span class="pill ${mode.toLowerCase()}">${esc(mode)}</span>`}</td>
       <td>${esc(ref)}</td>
       <td>${clean}</td>
       <td class="muted">${ago(a.last_seen)}</td>
@@ -568,6 +572,14 @@ async function driftPc(ip) {
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
 function closeDriftModal() { $('drift-modal').style.display = 'none'; }
+function showAgentError(ip) {
+  const msg = AGENT_ERRORS[ip] || 'No error detail reported yet — check again after the next heartbeat.';
+  $('drift-title').textContent = 'Agent error — ' + ip;
+  $('drift-body').innerHTML =
+    '<div class="hint" style="margin-top:0">The agent\'s last failure. Fix the cause, then retry the action (e.g. Redeploy).</div>' +
+    '<div style="color:#c0392b;font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;background:#fbe2e1;border-radius:8px;padding:10px;margin-top:8px">' + esc(msg) + '</div>';
+  $('drift-modal').style.display = 'flex';
+}
 function showDriftModal(ip, entries, err) {
   $('drift-title').textContent = 'Drift on ' + ip + ' — live vs deployed version';
   const body = $('drift-body');

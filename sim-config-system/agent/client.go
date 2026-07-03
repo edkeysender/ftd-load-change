@@ -28,6 +28,7 @@ type Heartbeat struct {
 	CurrentRef string `json:"current_ref,omitempty"`
 	Clean      bool   `json:"clean"`
 	Version    string `json:"version,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // LoadConfig reads an OPTIONAL agent.json. Missing file is fine (zero-config

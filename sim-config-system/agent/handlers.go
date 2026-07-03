@@ -257,7 +257,10 @@ func (a *Agent) doDrift(c Command) {
 
 func (a *Agent) fail(err error) {
 	log.Printf("ERROR: %v", err)
-	a.setState(StateError)
+	a.mu.Lock()
+	a.errMsg = err.Error()
+	a.mu.Unlock()
+	a.setState(StateError) // keeps errMsg (only non-ERROR states clear it)
 }
 
 func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
