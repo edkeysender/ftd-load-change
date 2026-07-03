@@ -249,9 +249,11 @@ def import_pc(pc: str):
     """Bootstrap: queue a read-only import. The agent walks its live dirs, applies
     excludes, and uploads the tree to /agents/{pc}/import-result. Nothing on the
     PC is modified."""
+    apps = manifest.resolved_apps(pc)
+    if not apps:
+        raise HTTPException(400, f"{pc} has no folders selected — nothing to import")
     folder = manifest.pc_folder(pc)
-    manifest.enqueue(pc, {"type": "import", "folder": folder,
-                          "apps": manifest.resolved_apps(pc)})
+    manifest.enqueue(pc, {"type": "import", "folder": folder, "apps": apps})
     return {"queued": True, "folder": folder}
 
 
@@ -375,6 +377,8 @@ def _dev_readiness():
     dev_exists = git_ops.ref_sha(config.DEV_BRANCH) is not None  # need v1.0 sealed first
     rows, all_ready = [], True
     for ip, spec in pcs.items():
+        if not (spec.get("apps") or {}):
+            continue  # a PC with no folders selected isn't part of this load
         imp = imports.get(ip)
         imported_at = imp["imported_at"] if imp else None
         # A dev version captures fresh content, so an import only counts if it
@@ -386,7 +390,7 @@ def _dev_readiness():
         rows.append({"ip": ip, "folder": spec.get("folder"),
                      "online": bool(agents.get(ip, {}).get("online")),
                      "imported_at": imported_at, "stale": stale, "ready": ready})
-    return {"pcs": rows, "ready": all_ready and bool(pcs) and dev_exists,
+    return {"pcs": rows, "ready": all_ready and bool(rows) and dev_exists,
             "manifest_saved_at": saved}
 
 

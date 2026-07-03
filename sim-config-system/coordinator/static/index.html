@@ -874,7 +874,14 @@ function flushSelection() {
 }
 async function saveBrowserManifest() {
   flushSelection();  // fold in the PC currently on screen
-  const nPcs = Object.values(manifestObj.pcs || {}).filter(p => Object.keys(p.apps || {}).length).length;
+  // Keep only PCs with folders — a blank PC (e.g. from NEW) isn't part of the load
+  // and must not gate import/deploy. They stay reachable via the online-agent list.
+  const pcs = {};
+  for (const [ip, spec] of Object.entries(manifestObj.pcs || {})) {
+    if (spec && Object.keys(spec.apps || {}).length) pcs[ip] = spec;
+  }
+  manifestObj.pcs = pcs;
+  const nPcs = Object.keys(pcs).length;
   try {
     await api('PUT', '/manifest/json', manifestObj);   // whole manifest = all PCs in this load
     configDirty = false;                               // saved — dev-version gate now uses server state
