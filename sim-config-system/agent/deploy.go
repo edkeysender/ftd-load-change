@@ -15,14 +15,43 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
+var gitOnce sync.Once
+var gitResolved string
+
+// gitExe returns the git executable. Explicit cfg.GitExe wins; otherwise we look on
+// PATH, then probe the standard Git-for-Windows install locations — a Windows
+// service often runs with a trimmed PATH that lacks git even when it's installed.
 func gitExe(cfg AgentConfig) string {
 	if cfg.GitExe != "" {
 		return cfg.GitExe
 	}
-	return "git"
+	gitOnce.Do(func() {
+		if p, err := exec.LookPath("git"); err == nil {
+			gitResolved = p
+			return
+		}
+		for _, c := range []string{
+			`C:\Program Files\Git\cmd\git.exe`,
+			`C:\Program Files\Git\bin\git.exe`,
+			`C:\Program Files (x86)\Git\cmd\git.exe`,
+			filepath.Join(os.Getenv("LOCALAPPDATA"), `Programs\Git\cmd\git.exe`),
+			filepath.Join(os.Getenv("ProgramFiles"), `Git\cmd\git.exe`),
+		} {
+			if c != "" {
+				if _, err := os.Stat(c); err == nil {
+					gitResolved = c
+					log.Printf("[git] using %s (not on PATH)", c)
+					return
+				}
+			}
+		}
+		gitResolved = "git" // not found — deploy will fail with a clear message
+	})
+	return gitResolved
 }
 
 // gitCmd runs git inside the local clone (cfg.RepoPath).
@@ -36,6 +65,9 @@ func gitCmd(cfg AgentConfig, args ...string) (string, error) {
 // (a moving branch like training-live/dev, or an immutable tag). Only `folder`
 // is materialised (sparse cone), so each PC pulls only what it runs.
 func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
+	if out, err := exec.Command(gitExe(cfg), "--version").CombinedOutput(); err != nil {
+		return fmt.Errorf("git not found on this PC — install Git for Windows (deploy needs it): %v: %s", err, out)
+	}
 	if _, err := os.Stat(filepath.Join(cfg.RepoPath, ".git")); err != nil {
 		if cfg.GitRemote == "" {
 			return fmt.Errorf("no git_remote configured in agent.json; cannot deploy")
