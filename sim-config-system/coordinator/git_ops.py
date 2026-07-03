@@ -272,6 +272,26 @@ def dev_import_commit(folder: str, message: str, author: str):
         return ref_sha(config.DEV_BRANCH)
 
 
+def prune_to_folders(folders, author: str = "config"):
+    """Remove top-level PC folders on dev that aren't in `folders` (the current
+    manifest's PC folders), so a dev version doesn't carry content from PCs that
+    were dropped from the load. Root files (manifest.yaml, .gitignore, …) are kept."""
+    keep = {f for f in folders if f} | {".git"}
+    with _WRITE_LOCK:
+        _git("checkout", config.DEV_BRANCH)
+        removed = False
+        for p in config.WORK_CLONE.iterdir():
+            if p.is_dir() and p.name not in keep:
+                shutil.rmtree(p)
+                removed = True
+        if removed:
+            _git("add", "-A")
+            if _git("diff", "--cached", "--quiet", check=False).returncode != 0:
+                _git(*_ident(author), "commit", "-m", "config: prune folders not in manifest")
+                _push(config.DEV_BRANCH)
+        return removed
+
+
 def snapshot_dev(tag: str, message: str, author: str):
     """Tag the current dev tip as a named test version (dev-v<next>) so admins have
     a list of testable builds to deploy to the sim before promoting. Force (-f):

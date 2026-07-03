@@ -413,6 +413,11 @@ def dev_snapshot(req: SnapshotReq):
     if not r["ready"]:
         missing = [p["ip"] for p in r["pcs"] if not p["ready"]]
         raise HTTPException(409, "import content first for: " + ", ".join(missing))
+    # Only the load's PC folders belong in the version — drop leftovers (e.g. a PC
+    # that was removed from the load but whose content still lingers on dev).
+    pcs = manifest.load_manifest().get("pcs", {})
+    folders = {spec.get("folder") for spec in pcs.values() if (spec.get("apps") or {})}
+    git_ops.prune_to_folders(folders)
     tag = db.next_dev_tag()
     sha = git_ops.snapshot_dev(tag, req.message, req.author)
     db.record_dev_version(tag, req.message, req.author, sha or "")
