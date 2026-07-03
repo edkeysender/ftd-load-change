@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -41,10 +44,34 @@ func LoadConfig(path string) AgentConfig {
 	return c
 }
 
-// Whoami asks the coordinator which IP it sees us as (authoritative identity) and
-// the manifest folder for that IP (may be empty if the PC isn't in the manifest).
+// localIPv4s lists this machine's non-loopback IPv4 addresses. On a dual-homed PC
+// there are several; the coordinator uses them to pin our identity to the manifest
+// IP instead of whichever interface routing happened to use for this request.
+func localIPv4s() []string {
+	var ips []string
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() {
+			if v4 := n.IP.To4(); v4 != nil {
+				ips = append(ips, v4.String())
+			}
+		}
+	}
+	return ips
+}
+
+// Whoami asks the coordinator for our identity + manifest folder. We send our local
+// IPv4s as candidates so a dual-homed PC resolves to its manifest IP deterministically
+// (folder may be empty if the PC isn't in the manifest).
 func (c *Client) Whoami() (ip, folder string, err error) {
-	resp, err := c.do("GET", "/whoami", nil)
+	path := "/whoami"
+	if cands := localIPv4s(); len(cands) > 0 {
+		path += "?candidates=" + url.QueryEscape(strings.Join(cands, ","))
+	}
+	resp, err := c.do("GET", path, nil)
 	if err != nil {
 		return "", "", err
 	}

@@ -130,13 +130,19 @@ def _auth(token: str | None):
 
 
 @app.get("/whoami")
-def whoami(request: Request, authorization: str | None = Header(None)):
-    """A zero-config agent calls this once at startup to learn the IP the
-    coordinator sees it as (authoritative identity) + its manifest folder."""
+def whoami(request: Request, candidates: str = "", authorization: str | None = Header(None)):
+    """A zero-config agent calls this once at startup to learn its identity + manifest
+    folder. `candidates` is the agent's own list of local IPv4s: a dual-homed PC has
+    several, so we pin it to whichever one the manifest actually knows — deterministic
+    regardless of which interface routed this request. Fall back to the observed
+    source IP (original behaviour) when no candidate matches / none were sent."""
     _auth(authorization)
-    ip = request.client.host if request.client else ""
+    src = request.client.host if request.client else ""
     pcs = manifest.load_manifest().get("pcs", {})
-    return {"ip": ip, "folder": (pcs.get(ip) or {}).get("folder")}
+    for ip in (c.strip() for c in candidates.split(",")):
+        if ip and ip in pcs:
+            return {"ip": ip, "folder": (pcs.get(ip) or {}).get("folder")}
+    return {"ip": src, "folder": (pcs.get(src) or {}).get("folder")}
 
 
 def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
