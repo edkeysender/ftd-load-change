@@ -86,7 +86,8 @@
   </section>
 
   <section>
-    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span></h2>
+    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
+      <button class="ghost" id="redeploy-testing-btn" style="margin-left:auto" onclick="redeployTesting()" disabled>Redeploy testing</button></h2>
     <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote to Master</b> to make one a customer training version.</div>
     <table>
       <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
@@ -319,8 +320,15 @@ function renderVersions(v) {
   }).join('') || '<tr><td colspan="5" class="muted">No versions yet — create v1.0 in PC Images.</td></tr>';
 }
 
+let activeTestingTag = '';   // dev version currently on the sim (badged TESTING)
 function renderDevVersions(v) {
   const live = v.training_live_sha;
+  activeTestingTag = (v.versions || []).find(x => live && x.commit_sha === live)?.tag || '';
+  const rt = $('redeploy-testing-btn');
+  if (rt) {
+    rt.disabled = !activeTestingTag;
+    rt.title = activeTestingTag ? 'Re-sync ' + activeTestingTag + ' to the sim' : 'No dev version is on the sim';
+  }
   $('devversions').innerHTML = (v.versions || []).map(x => {
     const isLive = live && x.commit_sha && x.commit_sha === live;
     const tagCell = FORGEJO
@@ -425,6 +433,7 @@ function renderHosts(d) {
 async function act(fn, msg) { try { await fn(); if (msg) toast(msg); await refresh(); } catch (e) { toast(e.message, true); } }
 const deploy    = () => act(() => api('POST', '/deploy', {}), 'Re-deploying live to the sim…');
 const deployRef = t => confirm('Deploy ' + t + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: t }), 'Deploying ' + t + ' to the sim…');
+const redeployTesting = () => activeTestingTag && confirm('Re-sync ' + activeTestingTag + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: activeTestingTag }), 'Re-syncing ' + activeTestingTag + ' to the sim…');
 function snapshotDev() {
   const author = requireUser();
   const msg = prompt('What does this dev test version contain?');
