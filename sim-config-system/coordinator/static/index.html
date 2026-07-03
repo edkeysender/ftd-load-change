@@ -567,14 +567,24 @@ async function deployAsDev() {
   const author = requireUser();
   const feedback = prompt('Admin feedback — what does this dev load contain / what to test?');
   if (!feedback) return;
+  const btn = $('deploy-dev-btn');
+  if (btn) btn.disabled = true;
+  setConfigStatus('creating dev version…', '');
   try {
     const snap = await api('POST', '/dev/snapshot', { message: feedback, author });
     await api('POST', '/deploy', { ref: snap.tag });
-    setConfigStatus('deployed <b>' + esc(snap.tag) + '</b> to the sim', 'ok');
-    toast('Dev load ' + snap.tag + ' deployed to the sim');
     $('newload-label').textContent = '';
-    refresh();
-  } catch (e) { setConfigStatus(e.message, 'bad'); toast(e.message, true); }
+    setConfigStatus('created <b>' + esc(snap.tag) + '</b> ✓', 'ok');
+    toast('Dev version ' + snap.tag + ' created and deployed to the sim ✓');
+    await refresh();
+    showMainTab('loads');                       // success → jump to Loads
+    const dv = $('devversions');
+    if (dv) dv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (e) {
+    setConfigStatus('failed: ' + e.message, 'bad');       // stay here, show why
+    toast('Deploy as Dev failed: ' + e.message, true);
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Render the "Create dev version" stepper: step-1 saved flag, per-PC import state,
