@@ -56,7 +56,9 @@ func (a *Agent) doUpdate(c Command) {
 
 	a.api.AckUpdate(a.cfg.PCIP) // clear the pending flag so we don't update-loop
 	log.Printf("[update] installed, relaunching...")
-	cmd := exec.Command(self)
+	// --post-update tells the new process to adopt state without redeploying, so
+	// updating the agent doesn't stop/restart the running sim apps.
+	cmd := exec.Command(self, "--post-update")
 	cmd.Dir = filepath.Dir(self)
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, os.Stdin
 	if err := cmd.Start(); err != nil {

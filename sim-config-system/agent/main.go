@@ -9,6 +9,7 @@ package main
 
 import (
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -16,6 +17,8 @@ import (
 type Agent struct {
 	cfg AgentConfig
 	api *Client
+
+	postUpdate bool // true when relaunched by a self-update — skip the boot redeploy
 
 	mu     sync.Mutex         // guards the fields below (read by heartbeat goroutine)
 	state  State              //
@@ -30,6 +33,11 @@ func main() {
 	cfg := LoadConfig("agent.json") // optional; baked defaults fill the rest
 	resolveConfig(&cfg)
 	a := &Agent{cfg: cfg, state: StateUnseeded, api: NewClient(cfg), clean: true}
+	for _, arg := range os.Args[1:] {
+		if arg == "--post-update" {
+			a.postUpdate = true // relaunched by a self-update: don't redeploy the sim
+		}
+	}
 	a.Run()
 }
 
@@ -107,8 +115,16 @@ func (a *Agent) Run() {
 		if cmd, err := a.api.GetEnforce(); err != nil {
 			log.Printf("enforce-on-start: %v (will rely on polled commands)", err)
 		} else if cmd != nil {
-			log.Printf("enforce-on-start: deploying %s", cmd.Ref)
-			a.dispatch(*cmd)
+			if a.postUpdate {
+				// Just self-updated: adopt the deployed state WITHOUT re-syncing or
+				// restarting apps, so updating the agent never disrupts the sim.
+				a.remember(*cmd, CheckClean(a.cfg, cmd.Apps))
+				a.setState(StateTraining)
+				log.Printf("post-update: adopted %s without redeploy", cmd.Ref)
+			} else {
+				log.Printf("enforce-on-start: deploying %s", cmd.Ref)
+				a.dispatch(*cmd)
+			}
 		}
 	}
 
