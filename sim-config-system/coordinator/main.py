@@ -80,8 +80,8 @@ def manifest_raw_save(req: ManifestRaw):
             raise HTTPException(400, f"pc {ip}: missing 'folder'")
         if not isinstance(spec.get("apps") or {}, dict):
             raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
-    if git_ops.commit_manifest(req.yaml):
-        db.set_meta("manifest_saved_at", time.time())  # folders changed -> re-import needed
+    git_ops.commit_manifest(req.yaml)
+    db.set_meta("manifest_saved_at", time.time())  # a dev version re-imports fresh content
     return {"ok": True, "pcs": list(data["pcs"].keys())}
 
 
@@ -106,9 +106,9 @@ def manifest_json_save(body: dict = Body(...)):
     """Persist a manifest built by the UI (file browser). Dumped to YAML and
     committed to dev (comments not preserved — use the raw editor to keep them)."""
     _validate_manifest(body)
-    if git_ops.commit_manifest(
-            yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True)):
-        db.set_meta("manifest_saved_at", time.time())  # folders changed -> re-import needed
+    git_ops.commit_manifest(
+        yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True))
+    db.set_meta("manifest_saved_at", time.time())  # a dev version re-imports fresh content
     return {"ok": True, "pcs": list(body["pcs"].keys())}
 
 
@@ -377,8 +377,10 @@ def _dev_readiness():
     for ip, spec in pcs.items():
         imp = imports.get(ip)
         imported_at = imp["imported_at"] if imp else None
-        stale = bool(imported_at) and imported_at < saved
-        ready = bool(imported_at) and not stale
+        # A dev version captures fresh content, so an import only counts if it
+        # happened AFTER the load was last saved. saved==0 -> save the config first.
+        ready = bool(imported_at) and saved > 0 and imported_at >= saved
+        stale = bool(imported_at) and saved > 0 and imported_at < saved
         if not ready:
             all_ready = False
         rows.append({"ip": ip, "folder": spec.get("folder"),

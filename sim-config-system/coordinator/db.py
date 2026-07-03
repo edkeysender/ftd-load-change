@@ -199,10 +199,17 @@ def list_dev_versions():
 
 
 def next_dev_tag():
-    """A dev build is named after the training version it works toward:
-    dev-v<next>. One dev build per target version (re-snapshotting the same target
-    overwrites it), so no numeric suffix."""
-    return "dev-" + next_version_tag()
+    """A dev build is named after the training version it works toward: dev-v<next>.
+    If that name already exists (another candidate for the same release), append the
+    next free -N suffix instead of silently overwriting it, so NEW is always fresh."""
+    base = "dev-" + next_version_tag()
+    existing = {r["tag"] for r in list_dev_versions()}
+    if base not in existing:
+        return base
+    n = 2
+    while f"{base}-{n}" in existing:
+        n += 1
+    return f"{base}-{n}"
 
 
 # --- bootstrap: imports + size reports ----------------------------------

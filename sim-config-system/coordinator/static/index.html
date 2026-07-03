@@ -235,6 +235,7 @@ const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&am
 
 let MANIFEST = [];   // [{ip, folder, role, apps}]
 let DISMISSED = [];  // PC IPs manually removed from PC status (hidden until agent returns)
+let configDirty = false;  // selection edited but not yet Saved -> block dev deploy
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -489,7 +490,15 @@ function populateLoadVersion(vers, devvers) {
     sel.innerHTML = refs.map(r => `<option>${esc(r)}</option>`).join('');
     if (prev && refs.includes(prev)) sel.value = prev;
   }
-  nextDevTag = 'dev-' + nextTrainingTag(training);  // dev build targets the next training version
+  // Next free dev tag: dev-v<next training>, with a -N suffix only if it collides
+  // with an existing dev build (mirrors the coordinator's next_dev_tag).
+  const base = 'dev-' + nextTrainingTag(training);
+  nextDevTag = base;
+  if (dev.includes(base)) {
+    let n = 2;
+    while (dev.includes(base + '-' + n)) n++;
+    nextDevTag = base + '-' + n;
+  }
 }
 // Next training version tag from the (newest-first) list — mirrors the coordinator.
 function nextTrainingTag(training) {
@@ -504,6 +513,7 @@ async function loadManifestFromVersion() {
     manifestObj = d.manifest || { pcs: {} };
     $('manifest').value = d.yaml || '';     // YAML tab
     await renderBrowserFromManifest();        // File browser tab reflects it too
+    configDirty = true;                       // loaded a version — Save to make it the dev load
     $('loadVersionRef').style.display = 'none';  // collapse the picker after loading
     setManifestStatus('loaded from ' + ref + ' — edit + Save commits to dev', 'ok');
     toast('Loaded manifest from ' + ref);
@@ -542,6 +552,7 @@ function startNewDevLoad() {
     manifestObj.pcs[ip] = Object.assign({}, manifestObj.pcs[ip], { apps: {} });
   });
   selectedApps = new Map();
+  configDirty = true;  // brand-new load — nothing saved yet
   if (browsePc) loadSelectedFromManifest(); else renderSelected();
   $('newload-label').textContent = '— new load: ' + (nextDevTag || 'dev-?');
   setConfigStatus('New dev load — pick folders per PC (switch PCs to add more), then Save', '');
@@ -568,9 +579,9 @@ function renderDevStepper(r, prog) {
   if (!$('deploy-dev-btn')) return;
   prog = prog || {};
   $('dev-nextver').textContent = nextDevTag ? '→ ' + nextDevTag : '';
-  const saved = r && r.manifest_saved_at;
-  $('step1-status').textContent = saved ? '✓ saved' : '— not saved yet';
-  $('step1-status').className = 'hint ' + (saved ? 'ok' : '');
+  const saved = r && r.manifest_saved_at && !configDirty;
+  $('step1-status').textContent = configDirty ? '— unsaved changes, click Save' : (saved ? '✓ saved' : '— not saved yet');
+  $('step1-status').className = 'hint ' + (configDirty ? 'bad' : (saved ? 'ok' : ''));
   const pcs = (r && r.pcs) || [];
   const list = $('dev-import-list');
   if (!pcs.length) {
@@ -596,7 +607,7 @@ function renderDevStepper(r, prog) {
         ${btn} ${right}</div>`;
     }).join('');
   }
-  const ready = !!(r && r.ready);
+  const ready = !!(r && r.ready) && !configDirty;  // unsaved edits block deploy too
   const btn = $('deploy-dev-btn');
   btn.disabled = !ready;
   btn.title = ready ? '' : 'Save config + import every PC in the load first';
@@ -762,6 +773,7 @@ function toggleSelect(entry, checked) {
   } else {
     selectedApps.delete(path);
   }
+  configDirty = true;  // selection changed -> must Save before deploying a dev version
   refreshTreeChecks();
   renderSelected();
 }
@@ -834,6 +846,7 @@ function removeSelected(ip, key, path) {
   } else if (manifestObj.pcs[ip] && manifestObj.pcs[ip].apps) {
     delete manifestObj.pcs[ip].apps[key];
   }
+  configDirty = true;
   renderSelected();
 }
 // Persist the CURRENT PC's tree selection into manifestObj (in memory), so picks
@@ -864,7 +877,8 @@ async function saveBrowserManifest() {
   const nPcs = Object.values(manifestObj.pcs || {}).filter(p => Object.keys(p.apps || {}).length).length;
   try {
     await api('PUT', '/manifest/json', manifestObj);   // whole manifest = all PCs in this load
-    setSaveStatus('saved ✓ — ' + nPcs + ' PC(s) in this load', 'ok');
+    configDirty = false;                               // saved — dev-version gate now uses server state
+    setSaveStatus('saved ✓ — ' + nPcs + ' PC(s) in this load — now import each PC', 'ok');
     refresh();
   } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
 }
