@@ -151,6 +151,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doCapture(c) // P3: quiesce -> mirror live->worktree -> upload bundle
 	case "browse":
 		a.doBrowse(c) // config panel: list a dir/drives (read-only, no state change)
+	case "drift":
+		a.doDrift(c) // PC status: list files that differ from the deployed version
 	case "update":
 		a.doUpdate(c) // download new build, swap exe, relaunch
 	default:

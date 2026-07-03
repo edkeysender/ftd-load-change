@@ -249,6 +249,12 @@ func (a *Agent) doBrowse(c Command) {
 	a.api.BrowseResult(a.cfg.PCIP, c.ReqID, c.Path, entries, errStr)
 }
 
+// doDrift (PC status "diff"): list files that differ between the deployed version
+// and live, correlated by ReqID. Read-only; does not change agent state.
+func (a *Agent) doDrift(c Command) {
+	a.api.DriftResult(a.cfg.PCIP, c.ReqID, DriftFiles(a.cfg, c.Apps))
+}
+
 func (a *Agent) fail(err error) {
 	log.Printf("ERROR: %v", err)
 	a.setState(StateError)

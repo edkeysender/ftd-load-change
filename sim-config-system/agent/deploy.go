@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -263,6 +264,79 @@ func CheckClean(cfg AgentConfig, apps map[string]AppSpec) bool {
 		}
 	}
 	return true
+}
+
+// DriftEntry is one file that differs between the deployed version (repo worktree)
+// and the live directory. Kind: "new" = in the version, missing from live;
+// "changed" = present in both but different; "extra" = in live, not in the version.
+type DriftEntry struct {
+	App  string `json:"app"`
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
+
+var driftLineRe = regexp.MustCompile(`(?i)^\s*(\*EXTRA File|New File|Newer|Older|Changed)\s+\d+\s+(.+?)\s*$`)
+
+// DriftFiles lists exactly which files differ between the deployed version and live
+// (a robocopy /L dry-run, parsed), so an operator can see WHAT made a PC "dirty".
+func DriftFiles(cfg AgentConfig, apps map[string]AppSpec) []DriftEntry {
+	var out []DriftEntry
+	for name, app := range apps {
+		if app.Repo == "" || len(app.Live) == 0 {
+			continue
+		}
+		xd, xf := robocopyExcludes(app.Exclude)
+		labels := liveLabels(app.Live)
+		for _, live := range app.Live {
+			src := filepath.Join(cfg.RepoPath, filepath.FromSlash(app.Repo))
+			if lbl := labels[live]; lbl != "" {
+				src = filepath.Join(src, lbl)
+			}
+			if _, err := os.Stat(src); err != nil {
+				continue
+			}
+			out = append(out, driftDiff(src, filepath.FromSlash(live), xd, xf, name)...)
+			if len(out) >= 1000 {
+				return out[:1000] // cap payload; a huge drift means "resync", not "read list"
+			}
+		}
+	}
+	return out
+}
+
+func driftDiff(src, dst string, xd, xf []string, app string) []DriftEntry {
+	args := []string{src, dst, "/MIR", "/L", "/NDL", "/NJH", "/NJS", "/NP", "/FP", "/BYTES", "/R:0", "/W:0"}
+	for _, d := range xd {
+		args = append(args, "/XD", d)
+	}
+	if len(xf) > 0 {
+		args = append(args, "/XF")
+		args = append(args, xf...)
+	}
+	out, _ := exec.Command("robocopy", args...).CombinedOutput()
+	var entries []DriftEntry
+	for _, line := range strings.Split(string(out), "\n") {
+		m := driftLineRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		marker, path := m[1], strings.TrimSpace(m[2])
+		kind := "changed"
+		if strings.EqualFold(marker, "New File") {
+			kind = "new"
+		} else if strings.EqualFold(marker, "*EXTRA File") {
+			kind = "extra"
+		}
+		rel := path
+		for _, base := range []string{src, dst} {
+			if len(rel) >= len(base) && strings.EqualFold(rel[:len(base)], base) {
+				rel = strings.TrimLeft(rel[len(base):], `\/`)
+				break
+			}
+		}
+		entries = append(entries, DriftEntry{App: app, Kind: kind, Path: rel})
+	}
+	return entries
 }
 
 func drifted(src, dst string, xd, xf []string) bool {

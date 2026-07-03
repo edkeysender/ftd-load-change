@@ -198,6 +198,15 @@
 
 </div>
 <div id="toast"></div>
+<div id="drift-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeDriftModal()">
+  <div style="background:#fff;border-radius:12px;max-width:760px;width:90%;max-height:80vh;overflow:auto;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <b id="drift-title">Drift</b>
+      <button class="ghost" style="margin-left:auto" onclick="closeDriftModal()">Close</button>
+    </div>
+    <div id="drift-body"></div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -299,7 +308,10 @@ function renderGrid(pcs, agents) {
     const deployed = a.mode === 'TRAINING';
     const mode = deployed ? (LIVE.kind || 'TRAINING') : (a.mode || 'UNSEEDED');
     const ref = deployed && LIVE.tag ? LIVE.tag : (a.current_ref || '—');
-    const clean = deployed ? (a.clean ? '<span class="ok">clean</span>' : '<span class="bad">dirty</span>') : '';
+    const clean = deployed
+      ? (a.clean ? '<span class="ok">clean</span>'
+                 : '<span class="bad">dirty</span> <button class="ghost" style="padding:1px 6px;font-size:10px" onclick="driftPc(\'' + esc(p.ip) + '\')">diff</button>')
+      : '';
     return `<tr>
       <td><b>${esc(p.ip)}</b><br><span class="muted">${esc(p.folder||'')}</span></td>
       <td>${esc(p.role||'')}</td>
@@ -530,6 +542,48 @@ const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip +
 const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Update requested for ' + ip + ' — agent self-updates within ~25s, or on next start, then syncs');
 const updateAllAgents = () => confirm('Request a self-update on every PC?') && act(() => api('POST', '/agents/update', {}), 'Update requested for all agents');
 const forgetPc = ip => confirm('Remove ' + ip + ' from PC status? It reappears automatically if that PC\'s agent checks in again.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/forget', {}), ip + ' removed from PC status');
+async function driftPc(ip) {
+  showDriftModal(ip, null);                       // loading state
+  try {
+    const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/drift');
+    showDriftModal(ip, d.entries || []);
+  } catch (e) { showDriftModal(ip, undefined, e.message); }
+}
+function closeDriftModal() { $('drift-modal').style.display = 'none'; }
+function showDriftModal(ip, entries, err) {
+  $('drift-title').textContent = 'Drift on ' + ip + ' — live vs deployed version';
+  const body = $('drift-body');
+  const KIND = {
+    new:     { label: 'missing in live', color: '#c0392b' },  // version has it, live doesn't
+    changed: { label: 'modified',        color: '#99641a' },  // differs
+    extra:   { label: 'added in live',   color: '#5b3ea6' },  // live has it, version doesn't
+  };
+  if (err) {
+    body.innerHTML = '<div class="bad">' + esc(err) + '</div>';
+  } else if (entries === null) {
+    body.innerHTML = '<div class="muted">Checking… the PC\'s agent must be online.</div>';
+  } else if (!entries.length) {
+    body.innerHTML = '<div class="ok">No differences — live matches the deployed version. (It may have just been re-synced.)</div>';
+  } else {
+    const byApp = {};
+    entries.forEach(e => { (byApp[e.app] = byApp[e.app] || []).push(e); });
+    body.innerHTML =
+      '<div class="hint" style="margin-top:0">' + entries.length + ' differing path(s). ' +
+      '<span style="color:#c0392b">missing in live</span> = version has it, live doesn\'t · ' +
+      '<span style="color:#99641a">modified</span> · ' +
+      '<span style="color:#5b3ea6">added in live</span> = not in the version.</div>' +
+      Object.entries(byApp).map(([app, es]) =>
+        '<div style="margin-top:10px"><b>' + esc(app) + '</b>' +
+        es.map(e => {
+          const k = KIND[e.kind] || { label: e.kind, color: '#777' };
+          return '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 0;display:flex;gap:8px">' +
+            '<span style="color:' + k.color + ';min-width:96px;flex-shrink:0">' + esc(k.label) + '</span>' +
+            '<span style="word-break:break-all">' + esc(e.path) + '</span></div>';
+        }).join('') + '</div>'
+      ).join('');
+  }
+  $('drift-modal').style.display = 'flex';
+}
 
 function seal() {
   const author = requireUser();
