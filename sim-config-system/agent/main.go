@@ -47,9 +47,9 @@ func resolveConfig(cfg *AgentConfig) {
 	if cfg.RepoPath == "" {
 		cfg.RepoPath = "C:/sim-agent/repo"
 	}
-	if cfg.GitExe == "" {
-		cfg.GitExe = "git"
-	}
+	// Leave GitExe empty unless explicitly set in agent.json — an empty value lets
+	// gitExe() locate git (PATH, standard installs, or the portable Installs bundle).
+	// Defaulting it to "git" here short-circuited all of that.
 	if cfg.CoordinatorURL == "" {
 		panic("no coordinator URL: provide agent.json or build with -ldflags -X main.DefaultCoordinator=...")
 	}
