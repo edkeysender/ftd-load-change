@@ -65,6 +65,25 @@ func gitExe(cfg AgentConfig) string {
 	return "git" // not found yet — don't cache; re-probe next deploy
 }
 
+// installDirInfo reports what's under the portable-git install dir, so a failed
+// deploy self-explains in the dashboard whether the bundle actually unzipped there.
+func installDirInfo() string {
+	dir := `C:\sim-agent\git`
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	git := findGitIn(dir)
+	if git == "" {
+		git = "no git.exe found under it"
+	}
+	return fmt.Sprintf("%s contains %v; %s", dir, names, git)
+}
+
 // findGitIn walks a directory for git.exe, preferring a cmd\git.exe wrapper, then
 // any git.exe (e.g. mingw64\bin\git.exe). Empty if none.
 func findGitIn(dir string) string {
@@ -102,7 +121,7 @@ func gitCmd(cfg AgentConfig, args ...string) (string, error) {
 // is materialised (sparse cone), so each PC pulls only what it runs.
 func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 	if out, err := exec.Command(gitExe(cfg), "--version").CombinedOutput(); err != nil {
-		return fmt.Errorf("git not found on this PC — install Git for Windows (deploy needs it): %v: %s", err, out)
+		return fmt.Errorf("git not found on this PC — install Git for Windows (deploy needs it): %v: %s [%s]", err, out, installDirInfo())
 	}
 	if _, err := os.Stat(filepath.Join(cfg.RepoPath, ".git")); err != nil {
 		if cfg.GitRemote == "" {
