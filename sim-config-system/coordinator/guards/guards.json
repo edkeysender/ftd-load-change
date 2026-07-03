@@ -1,0 +1,26 @@
+[
+  {
+    "id": "wallpaper",
+    "name": "Wallpaper and login image",
+    "desc": "Desktop + lock-screen image matches the standard.",
+    "assets": ["wallpaper.png"],
+    "check": "wallpaper-check.ps1",
+    "apply": "wallpaper-apply.ps1"
+  },
+  {
+    "id": "git",
+    "name": "Git for Windows",
+    "desc": "Required for deploy (portable, includes git-lfs).",
+    "assets": ["git-bundle.zip"],
+    "check": "git-check.ps1",
+    "apply": "git-apply.ps1"
+  },
+  {
+    "id": "ssh",
+    "name": "SSH open",
+    "desc": "OpenSSH server installed, running, firewall open.",
+    "assets": [],
+    "check": "ssh-check.ps1",
+    "apply": "ssh-apply.ps1"
+  }
+]

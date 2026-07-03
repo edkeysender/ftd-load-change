@@ -29,6 +29,11 @@ AGENT_BINARY = Path(os.environ.get("SIM_AGENT_BINARY", str(_PROJECT_ROOT / "dist
 # download + run/unzip on a PC. Holds the asset files and an installs.json manifest.
 INSTALLS_DIR = Path(os.environ.get("SIM_INSTALLS_DIR", "/srv/sim-config/installs"))
 
+# Guards: per-PC compliance items (check + apply scripts). Definitions + .ps1 scripts
+# ship with the code here; large binary assets (wallpaper.png, git-bundle.zip) live in
+# INSTALLS_DIR and are referenced by name.
+GUARDS_DIR = Path(os.environ.get("SIM_GUARDS_DIR", str(Path(__file__).resolve().parent / "guards")))
+
 # SQLite state DB.
 DB_PATH = Path(os.environ.get("SIM_DB", "/srv/sim-config/coordinator.db"))
 

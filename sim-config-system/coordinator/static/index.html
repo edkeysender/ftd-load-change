@@ -196,9 +196,9 @@
   </section>
 
   <section style="order:4">
-    <h2>Installs <span class="muted" style="font-size:11px;font-weight:400">(prerequisites)</span></h2>
-    <div class="hint">Provision prerequisites on a PC — e.g. <b>Git for Windows</b> (required for deploy), redistributables, runtimes. Push to a PC and the agent downloads + installs it. Add assets in the coordinator's installs dir (<code>deploy/prepare-git-bundle.sh</code> sets up git).</div>
-    <div id="installs-list"></div>
+    <h2>Installs <span class="muted" style="font-size:11px;font-weight:400">(prerequisites &amp; guards)</span></h2>
+    <div class="hint">Keep each PC's config intact — a checklist per computer. <span class="ok">✓</span> = compliant, <span class="bad">✗</span> = not. Click <b>Apply</b> to fix. Add more items with a check/apply script pair in the coordinator's <code>guards/</code> dir.</div>
+    <div id="guards-list"></div>
   </section>
 
   </div><!-- /maintab-config -->
@@ -271,7 +271,7 @@ async function refresh() {
   const [pcs, vers, boot, mpcs, cfg, devvers, devready, insts] = await Promise.all([
     safe(api('GET', '/pcs')), safe(api('GET', '/versions')), safe(api('GET', '/bootstrap')),
     safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')), safe(api('GET', '/dev/versions')),
-    safe(api('GET', '/dev/readiness')), safe(api('GET', '/installs')),
+    safe(api('GET', '/dev/readiness')), safe(api('GET', '/guards')),
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
   AGENT_ERRORS = {}; ((pcs && pcs.agents) || []).forEach(a => { if (a.error) AGENT_ERRORS[a.pc_ip] = a.error; });
@@ -295,7 +295,7 @@ async function refresh() {
   LAST_READY = devready; LAST_PROG = (boot && boot.progress) || {};
   renderDevStepper(LAST_READY, LAST_PROG);
   renderDeployProgress(DEPLOYPROG, agents);
-  renderInstalls(insts, agents);
+  renderGuards(insts, agents);
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
   if (devvers) renderDevVersions(devvers);
@@ -578,30 +578,51 @@ async function driftPc(ip) {
     showDriftModal(ip, d.entries || []);
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
-function renderInstalls(data, agents) {
-  const el = $('installs-list'); if (!el) return;
-  const installs = (data && data.installs) || [];
+const guardsChecked = new Set();  // PCs auto-checked once this session
+function renderGuards(data, agents) {
+  const el = $('guards-list'); if (!el) return;
+  const guards = (data && data.guards) || [];
   const results = (data && data.results) || {};
-  if (!installs.length) {
-    el.innerHTML = '<div class="muted" style="font-size:13px">No installs available yet — add asset files + installs.json to the coordinator\'s installs dir (run <code>deploy/prepare-git-bundle.sh</code> to set up git).</div>';
+  if (!guards.length) {
+    el.innerHTML = '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>';
     return;
   }
   const online = Object.values(agents || {}).filter(a => a.online);
-  el.innerHTML = installs.map(it => {
-    const btns = online.length
-      ? online.map(a => `<button class="ghost" style="padding:2px 8px;font-size:11px" onclick="pushInstall('${esc(a.pc_ip)}','${esc(it.id)}')">install on ${esc(a.pc_ip)}</button>`).join(' ')
-      : '<span class="muted" style="font-size:12px">no PCs online</span>';
-    const res = Object.entries(results).filter(([, r]) => r && r.id === it.id)
-      .map(([ip, r]) => `<span style="font-size:11px;margin-right:12px"><b>${esc(ip)}</b> <span class="${r.ok ? 'ok' : 'bad'}">${r.ok ? '✓ installed' : '✗ ' + esc(r.msg || 'failed')}</span></span>`).join('');
-    return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px;margin-bottom:8px">
-      <div><b>${esc(it.name || it.id)}</b> <span class="muted" style="font-size:12px">${esc(it.desc || '')}</span></div>
-      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">${btns}</div>
-      ${res ? `<div style="margin-top:6px">${res}</div>` : ''}
-    </div>`;
+  if (!online.length) { el.innerHTML = '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
+  // Auto-run the checks once per PC per session so the checklist populates.
+  online.forEach(a => {
+    if (!guardsChecked.has(a.pc_ip)) { guardsChecked.add(a.pc_ip); api('POST', '/guard/check-all', { pc: a.pc_ip }).catch(() => {}); }
+  });
+  el.innerHTML = online.map(a => {
+    const ip = a.pc_ip, r = results[ip] || {};
+    const rows = guards.map(g => {
+      const st = r[g.id];
+      let box, cls, txt;
+      if (!st) { box = '☐'; cls = 'muted'; txt = 'not checked'; }
+      else if (st.pass === true) { box = '☑'; cls = 'ok'; txt = 'pass'; }
+      else if (st.pass === false) { box = '☒'; cls = 'bad'; txt = 'fail'; }
+      else { box = '⏳'; cls = 'muted'; txt = st.detail || 'applying…'; }
+      const canApply = !st || st.pass !== true;
+      const applyBtn = canApply ? `<button class="ghost" style="padding:1px 8px;font-size:11px" onclick="applyGuard('${esc(ip)}','${esc(g.id)}')">Apply</button>` : '';
+      const tip = st && st.detail ? ' title="' + esc(st.detail) + '"' : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"${tip}>
+        <span class="${cls}" style="font-size:15px;width:18px">${box}</span>
+        <span style="min-width:210px">${esc(g.name)}</span>
+        <span class="${cls}" style="font-size:11px;min-width:60px">${esc(txt)}</span>
+        ${applyBtn}</div>`;
+    }).join('');
+    return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <b>Computer ${esc(ip)}</b> <span class="muted" style="font-size:11px">${esc((agents[ip]||{}).folder||'')}</span>
+        <button class="ghost" style="margin-left:auto;padding:1px 8px;font-size:11px" onclick="recheckGuards('${esc(ip)}')">↻ Recheck</button>
+      </div>${rows}</div>`;
   }).join('');
 }
-function pushInstall(ip, id) {
-  act(() => api('POST', '/install', { pc: ip, id }), 'Install queued on ' + ip + ' — watch for the result');
+function applyGuard(ip, id) {
+  act(() => api('POST', '/guard/apply', { pc: ip, id }), 'Applying ' + id + ' on ' + ip + '…');
+}
+function recheckGuards(ip) {
+  act(() => api('POST', '/guard/check-all', { pc: ip }), 'Re-checking ' + ip + '…');
 }
 function closeDriftModal() { $('drift-modal').style.display = 'none'; }
 function showAgentError(ip) {

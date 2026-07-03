@@ -174,6 +174,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doFileDiff(c) // read one drifted file (version vs live) for the UI diff
 	case "install":
 		a.doInstall(c) // provision a prerequisite (git bundle, redist, …)
+	case "guard":
+		a.doGuard(c) // run a per-PC compliance check/apply script
 	case "update":
 		a.doUpdate(c) // download new build, swap exe, relaunch
 	default:

@@ -38,6 +38,10 @@ _agent_errors: dict = {}
 # Last install result per PC: pc_ip -> {id, ok, msg, at}
 _install_results: dict = {}
 
+# Guard status per PC: pc_ip -> {guard_id -> {pass, detail, at}}. `pass` is None while
+# an apply is running (pending re-check).
+_guard_results: dict = {}
+
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
 _update_pending: set = set()
@@ -382,6 +386,94 @@ def install_result(pc_ip: str, payload: dict = Body(...), authorization: str | N
     _auth(authorization)
     _install_results[pc_ip] = {"id": payload.get("id"), "ok": bool(payload.get("ok")),
                                "msg": payload.get("msg", ""), "at": time.time()}
+    return {"ok": True}
+
+
+# ---- guards: per-PC compliance checks + fixes -------------------------
+def _load_guards():
+    f = config.GUARDS_DIR / "guards.json"
+    if not f.exists():
+        return []
+    try:
+        data = json.loads(f.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _guard_cmd(item, kind):
+    """Build a guard command: which script to run + (for apply) the assets to fetch."""
+    script = item["check"] if kind == "check" else item["apply"]
+    assets = [] if kind == "check" else [
+        {"name": a, "url": f"/guards/file/{a}"} for a in item.get("assets", [])]
+    return {"type": "guard", "guard_id": item["id"], "guard_kind": kind,
+            "script_url": f"/guards/file/{script}", "script_name": script, "assets": assets}
+
+
+@app.get("/guards")
+def guards():
+    return {"guards": _load_guards(), "results": _guard_results}
+
+
+@app.get("/guards/file/{name}")
+def guard_file(name: str, authorization: str | None = Header(None)):
+    """Serve a guard script (from GUARDS_DIR) or asset (from INSTALLS_DIR)."""
+    _auth(authorization)
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "bad name")
+    for base in (config.GUARDS_DIR, config.INSTALLS_DIR):
+        p = base / name
+        if p.exists() and p.is_file():
+            return FileResponse(p, filename=name, media_type="application/octet-stream")
+    raise HTTPException(404, "guard file not found")
+
+
+class GuardReq(BaseModel):
+    pc: str
+    id: str
+
+
+@app.post("/guard/check")
+def guard_check(req: GuardReq):
+    item = next((x for x in _load_guards() if x["id"] == req.id), None)
+    if not item:
+        raise HTTPException(404, "unknown guard")
+    manifest.enqueue(req.pc, _guard_cmd(item, "check"))
+    return {"queued": True}
+
+
+@app.post("/guard/apply")
+def guard_apply(req: GuardReq):
+    item = next((x for x in _load_guards() if x["id"] == req.id), None)
+    if not item:
+        raise HTTPException(404, "unknown guard")
+    _guard_results.setdefault(req.pc, {})[req.id] = {"pass": None, "detail": "applying…", "at": time.time()}
+    manifest.enqueue(req.pc, _guard_cmd(item, "apply"))
+    return {"queued": True}
+
+
+@app.post("/guard/check-all")
+def guard_check_all(payload: dict = Body(...)):
+    pc = payload.get("pc")
+    for item in _load_guards():
+        manifest.enqueue(pc, _guard_cmd(item, "check"))
+    return {"queued": True, "count": len(_load_guards())}
+
+
+@app.post("/agents/{pc_ip}/guard-result")
+def guard_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    _auth(authorization)
+    gid, kind, ok = payload.get("id"), payload.get("kind"), bool(payload.get("ok"))
+    detail = payload.get("detail", "")
+    slot = _guard_results.setdefault(pc_ip, {})
+    if kind == "check":
+        slot[gid] = {"pass": ok, "detail": detail, "at": time.time()}
+    else:  # apply: mark pending + re-check to refresh pass/fail
+        slot[gid] = {"pass": None, "detail": ("applied — re-checking" if ok else "apply failed: " + detail),
+                     "at": time.time()}
+        item = next((x for x in _load_guards() if x["id"] == gid), None)
+        if item:
+            manifest.enqueue(pc_ip, _guard_cmd(item, "check"))
     return {"ok": True}
 
 

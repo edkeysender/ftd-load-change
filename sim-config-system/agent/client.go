@@ -284,6 +284,16 @@ func (c *Client) DriftResult(pcIP, reqID string, entries []DriftEntry) {
 	}
 }
 
+// GuardResult reports the outcome of a guard check/apply to the coordinator.
+func (c *Client) GuardResult(pcIP, id, kind string, ok bool, detail string) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/guard-result", map[string]any{
+		"id": id, "kind": kind, "ok": ok, "detail": detail,
+	})
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // FileDiffResult posts one file's version-vs-live contents for the UI diff.
 func (c *Client) FileDiffResult(pcIP, reqID string, d FileDiff) {
 	resp, err := c.do("POST", "/agents/"+pcIP+"/filediff-result", map[string]any{

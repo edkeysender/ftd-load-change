@@ -63,6 +63,18 @@ type Command struct {
 	// filediff: read one drifted file (version vs live) for the UI diff.
 	DiffApp  string `json:"diff_app"`
 	DiffPath string `json:"diff_path"`
+	// guard: run a per-PC compliance check/apply script (optionally with assets).
+	GuardID     string     `json:"guard_id"`
+	GuardKind   string     `json:"guard_kind"` // check | apply
+	ScriptURL   string     `json:"script_url"`
+	ScriptName  string     `json:"script_name"`
+	GuardAssets []AssetRef `json:"assets"`
+}
+
+// AssetRef is a file the agent downloads for a guard apply (name + coordinator path).
+type AssetRef struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 // AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the
