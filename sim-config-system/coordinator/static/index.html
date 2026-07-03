@@ -251,6 +251,8 @@ let DISMISSED = [];  // PC IPs manually removed from PC status (hidden until age
 let configDirty = false;  // selection edited but not yet Saved -> block dev deploy
 let LIVE = { tag: '', kind: 'TRAINING' };  // version training-live points at + its kind
 let DEPLOYPROG = {};  // per-PC sync state for the current deploy
+let LAST_READY = null, LAST_PROG = {};  // last dev-stepper inputs, for on-demand re-render
+const importStarting = new Set();  // PCs where Import was clicked but upload hasn't begun
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -282,7 +284,8 @@ async function refresh() {
     renderGrid(MANIFEST, agents);
     if (boot) renderBootstrap(MANIFEST, boot);
   }
-  renderDevStepper(devready, boot && boot.progress);
+  LAST_READY = devready; LAST_PROG = (boot && boot.progress) || {};
+  renderDevStepper(LAST_READY, LAST_PROG);
   renderDeployProgress(DEPLOYPROG, agents);
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
@@ -743,10 +746,13 @@ function renderDevStepper(r, prog) {
   } else {
     list.innerHTML = pcs.map(p => {
       const cp = prog[p.ip];
+      if (cp) importStarting.delete(p.ip);  // real progress arrived — no longer "starting"
       let right;
       if (cp && !cp.done) {
         const pct = cp.total_bytes ? Math.min(100, Math.round(100 * cp.received_bytes / cp.total_bytes)) : 0;
         right = `<span class="muted" style="font-size:12px">importing… ${fmtBytes(cp.received_bytes)} / ${fmtBytes(cp.total_bytes)} (${pct}%)</span>`;
+      } else if (importStarting.has(p.ip)) {
+        right = `<span class="muted" style="font-size:12px">starting… <span style="opacity:.7">(agent is scanning the folder)</span></span>`;
       } else if (p.ready) {
         right = `<span class="ok" style="font-size:12px">✓ imported ${ago(p.imported_at)}</span>`;
       } else if (p.stale) {
@@ -768,18 +774,28 @@ function renderDevStepper(r, prog) {
 }
 function devImport(pc) {
   api('POST', '/import/' + encodeURIComponent(pc), {})
-    .then(() => { toast('Importing ' + pc + ' — pulling its content into the version…'); pollDevImport(pc); })
-    .catch(e => toast(e.message, true));
+    .then(() => {
+      importStarting.add(pc);                       // show "starting…" until upload begins
+      renderDevStepper(LAST_READY, LAST_PROG);      // reflect it immediately
+      toast('Importing ' + pc + ' — pulling its content into the version…');
+      pollDevImport(pc);
+    })
+    .catch(e => { importStarting.delete(pc); toast(e.message, true); });
 }
 async function pollDevImport(pc) {
   for (let i = 0; i < 1200; i++) {                 // ~30 min cap at 1.5s
     let boot, ready;
     try { boot = await api('GET', '/bootstrap'); } catch (e) { break; }
     try { ready = await api('GET', '/dev/readiness'); } catch (e) {}
-    renderDevStepper(ready, boot && boot.progress);
-    const p = (boot.progress || {})[pc];
-    if (p && p.done) { refresh(); break; }
-    if (!p && i > 6) { refresh(); break; }
+    LAST_READY = ready || LAST_READY;
+    LAST_PROG = (boot && boot.progress) || {};
+    const p = LAST_PROG[pc];
+    if (p) importStarting.delete(pc);              // upload has begun
+    renderDevStepper(LAST_READY, LAST_PROG);
+    if (p && p.done) { importStarting.delete(pc); refresh(); break; }
+    // keep waiting while "starting…" (agent may scan a big folder first); give up ~2min in.
+    if (importStarting.has(pc)) { if (i > 80) { importStarting.delete(pc); renderDevStepper(LAST_READY, LAST_PROG); refresh(); break; } }
+    else if (!p && i > 6) { refresh(); break; }
     await new Promise(r => setTimeout(r, 1500));
   }
 }
