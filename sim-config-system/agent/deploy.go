@@ -37,6 +37,7 @@ func gitExe(cfg AgentConfig) string {
 		return gitResolved
 	}
 	if p, err := exec.LookPath("git"); err == nil {
+		log.Printf("[git] resolved via PATH: %s", p)
 		gitResolved = p
 		return gitResolved
 	}
@@ -57,11 +58,14 @@ func gitExe(cfg AgentConfig) string {
 	}
 	// Portable git installed via the Installs panel — search the tree since the
 	// bundle's exact layout can vary (cmd\git.exe vs mingw64\bin\git.exe, nested).
-	if p := findGitIn(`C:\sim-agent\git`); p != "" {
+	p := findGitIn(`C:\sim-agent\git`)
+	log.Printf("[git] findGitIn(C:\\sim-agent\\git) = %q", p)
+	if p != "" {
 		gitResolved = p
 		log.Printf("[git] using %s (portable install)", p)
 		return gitResolved
 	}
+	log.Printf("[git] NOT FOUND — %s", installDirInfo())
 	return "git" // not found yet — don't cache; re-probe next deploy
 }
 
@@ -90,23 +94,24 @@ func findGitIn(dir string) string {
 	if _, err := os.Stat(dir); err != nil {
 		return ""
 	}
-	best := ""
+	cmdHit, anyHit := "", ""
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info == nil || info.IsDir() {
-			return nil
+			return nil // tolerate unreadable subdirs; keep walking
 		}
 		if strings.EqualFold(info.Name(), "git.exe") {
-			if strings.Contains(strings.ToLower(p), `\cmd\`) {
-				best = p
-				return filepath.SkipAll // cmd\git.exe is the one we want
-			}
-			if best == "" {
-				best = p
+			if cmdHit == "" && strings.Contains(strings.ToLower(p), `\cmd\`) {
+				cmdHit = p // the cmd\git.exe wrapper is preferred
+			} else if anyHit == "" {
+				anyHit = p
 			}
 		}
 		return nil
 	})
-	return best
+	if cmdHit != "" {
+		return cmdHit
+	}
+	return anyHit
 }
 
 // gitCmd runs git inside the local clone (cfg.RepoPath).
