@@ -412,7 +412,23 @@ def _guard_cmd(item, kind):
 
 @app.get("/guards")
 def guards():
-    return {"guards": _load_guards(), "results": _guard_results}
+    items = _load_guards()
+    for it in items:  # flag assets that haven't been uploaded yet
+        it["assets_missing"] = [a for a in it.get("assets", [])
+                                if not ((config.GUARDS_DIR / a).exists() or (config.INSTALLS_DIR / a).exists())]
+    return {"guards": items, "results": _guard_results}
+
+
+@app.put("/installs/asset/{name}")
+async def upload_asset(name: str, request: Request):
+    """Upload a guard/install asset (e.g. wallpaper.png) from the dashboard — the raw
+    file body is saved into the installs dir under `name`."""
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(400, "bad name")
+    config.INSTALLS_DIR.mkdir(parents=True, exist_ok=True)
+    data = await request.body()
+    (config.INSTALLS_DIR / name).write_bytes(data)
+    return {"ok": True, "name": name, "bytes": len(data)}
 
 
 @app.get("/guards/file/{name}")

@@ -587,13 +587,21 @@ function renderGuards(data, agents) {
     el.innerHTML = '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>';
     return;
   }
+  // Missing assets (e.g. wallpaper.png) — upload once from here.
+  const missing = {};
+  guards.forEach(g => (g.assets_missing || []).forEach(a => { missing[a] = g.name; }));
+  const missHdr = Object.keys(missing).length
+    ? '<div style="border:1px solid #f0d9a0;background:#fdf6e6;border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:13px">' +
+      '⚠ Upload missing asset(s): ' +
+      Object.entries(missing).map(([a, gn]) => '<label style="margin-right:14px"><b>' + esc(a) + '</b> <span class="muted">(' + esc(gn) + ')</span> <input type="file" style="font-size:11px" onchange="uploadAsset(\'' + esc(a) + '\',this)"></label>').join('') +
+      '</div>' : '';
   const online = Object.values(agents || {}).filter(a => a.online);
-  if (!online.length) { el.innerHTML = '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
+  if (!online.length) { el.innerHTML = missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
   // Auto-run the checks once per PC per session so the checklist populates.
   online.forEach(a => {
     if (!guardsChecked.has(a.pc_ip)) { guardsChecked.add(a.pc_ip); api('POST', '/guard/check-all', { pc: a.pc_ip }).catch(() => {}); }
   });
-  el.innerHTML = online.map(a => {
+  el.innerHTML = missHdr + online.map(a => {
     const ip = a.pc_ip, r = results[ip] || {};
     const rows = guards.map(g => {
       const st = r[g.id];
@@ -623,6 +631,17 @@ function applyGuard(ip, id) {
 }
 function recheckGuards(ip) {
   act(() => api('POST', '/guard/check-all', { pc: ip }), 'Re-checking ' + ip + '…');
+}
+async function uploadAsset(name, input) {
+  const f = input.files && input.files[0];
+  if (!f) return;
+  toast('Uploading ' + name + '…');
+  try {
+    const r = await fetch('/installs/asset/' + encodeURIComponent(name), { method: 'PUT', body: f });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    toast(name + ' uploaded ✓');
+    refresh();
+  } catch (e) { toast('upload failed: ' + e.message, true); }
 }
 function closeDriftModal() { $('drift-modal').style.display = 'none'; }
 function showAgentError(ip) {
