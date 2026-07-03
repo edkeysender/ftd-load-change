@@ -504,6 +504,7 @@ function showMainTab(t) {
   $('maintab-config').style.display = t === 'config' ? 'flex' : 'none';
   $('mtab-loads').className = t === 'loads' ? '' : 'ghost';
   $('mtab-config').className = t === 'config' ? '' : 'ghost';
+  localStorage.setItem('simMainTab', t);  // remember across refresh
 }
 const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
 
@@ -793,7 +794,7 @@ async function saveBrowserManifest() {
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
-showMainTab('loads');      // top-level tab
+showMainTab(localStorage.getItem('simMainTab') || 'loads');  // restore last tab
 showConfigTab('browser');  // default config sub-tab (view only)
 loadConfig();              // load browser data once
 loadManifest();            // load YAML once (tab switches no longer reload)
