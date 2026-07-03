@@ -45,13 +45,21 @@ const (
 
 // Command is pulled from the coordinator.
 type Command struct {
-	Type   string             `json:"type"`   // import | size_report | deploy | track | capture | browse
+	Type   string             `json:"type"`   // import | size_report | deploy | track | capture | browse | drift | install
 	Ref    string             `json:"ref"`    // for deploy/track
 	Folder string             `json:"folder"` // for import/capture
 	Apps      map[string]AppSpec `json:"apps"`       // for import + size_report (resolved specs)
-	ReqID     string             `json:"req_id"`     // for browse (correlates the result)
+	ReqID     string             `json:"req_id"`     // for browse/drift (correlates the result)
 	Path      string             `json:"path"`       // for browse (dir to list; "" = drives)
 	GitRemote string             `json:"git_remote"` // for deploy/track/capture (Forgejo URL)
+	// install: fetch an asset from the coordinator and run it or unzip it.
+	InstallID   string   `json:"install_id"`
+	Name        string   `json:"name"`
+	URL         string   `json:"url"`          // coordinator path to download the asset
+	File        string   `json:"file"`         // asset filename (preserves the .exe/.msi ext to run)
+	InstallType string   `json:"install_type"` // run | unzip
+	Args        []string `json:"args"`         // silent-install flags for a run installer
+	Target      string   `json:"target"`       // unzip destination
 }
 
 // AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the

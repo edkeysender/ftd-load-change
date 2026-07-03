@@ -154,6 +154,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doBrowse(c) // config panel: list a dir/drives (read-only, no state change)
 	case "drift":
 		a.doDrift(c) // PC status: list files that differ from the deployed version
+	case "install":
+		a.doInstall(c) // provision a prerequisite (git bundle, redist, …)
 	case "update":
 		a.doUpdate(c) // download new build, swap exe, relaunch
 	default:

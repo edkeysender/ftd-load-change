@@ -25,6 +25,10 @@ SEED_GITATTRIBUTES = Path(os.environ.get("SIM_SEED_GITATTRIBUTES", str(_PROJECT_
 # Built agent binary served to agents for remote self-update (build-agent.sh output).
 AGENT_BINARY = Path(os.environ.get("SIM_AGENT_BINARY", str(_PROJECT_ROOT / "dist" / "simagent.exe")))
 
+# Directory of installable prerequisites (git bundle, redists, …) that agents can
+# download + run/unzip on a PC. Holds the asset files and an installs.json manifest.
+INSTALLS_DIR = Path(os.environ.get("SIM_INSTALLS_DIR", "/srv/sim-config/installs"))
+
 # SQLite state DB.
 DB_PATH = Path(os.environ.get("SIM_DB", "/srv/sim-config/coordinator.db"))
 

@@ -231,7 +231,12 @@ func (c *Client) AckUpdate(pcIP string) {
 
 // DownloadBinary fetches the current agent build from the coordinator into dest.
 func (c *Client) DownloadBinary(dest string) error {
-	resp, err := c.do("GET", "/agent/binary", nil)
+	return c.DownloadFile("/agent/binary", dest)
+}
+
+// DownloadFile streams a coordinator path into a local file.
+func (c *Client) DownloadFile(path, dest string) error {
+	resp, err := c.do("GET", path, nil)
 	if err != nil {
 		return err
 	}
@@ -246,6 +251,16 @@ func (c *Client) DownloadBinary(dest string) error {
 	defer f.Close()
 	_, err = io.Copy(f, resp.Body)
 	return err
+}
+
+// InstallResult reports the outcome of an install command to the coordinator.
+func (c *Client) InstallResult(pcIP, id string, ok bool, msg string) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/install-result", map[string]any{
+		"id": id, "ok": ok, "msg": msg,
+	})
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 // BrowseResult returns a directory listing for a config-panel browse request.

@@ -4,6 +4,7 @@ The coordinator is the single git writer and the orchestration brain. Agents are
 read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
+import json
 import threading
 import time
 import uuid
@@ -31,6 +32,9 @@ _last_deploy_dur: dict = {}
 
 # Last error message reported by each agent (cleared when it leaves ERROR).
 _agent_errors: dict = {}
+
+# Last install result per PC: pc_ip -> {id, ok, msg, at}
+_install_results: dict = {}
 
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
@@ -317,6 +321,66 @@ def deploy(req: DeployReq):
     git_ops.publish_training_live()  # ensure the remote pointer == coordinator's
     _enqueue_deploy_all()
     return {"deploying": config.TRAINING_LIVE}
+
+
+# ---- installable prerequisites (git, redists, …) ----------------------
+def _load_installs():
+    """Read the installs manifest (id/name/desc/file/type/args/target per entry)."""
+    f = config.INSTALLS_DIR / "installs.json"
+    if not f.exists():
+        return []
+    try:
+        data = json.loads(f.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+@app.get("/installs")
+def installs():
+    """List installable prerequisites + the last install result per PC."""
+    return {"installs": _load_installs(), "results": _install_results}
+
+
+@app.get("/installs/{iid}/file")
+def install_file(iid: str, authorization: str | None = Header(None)):
+    """Serve an install asset (the agent downloads this, then runs/unzips it)."""
+    _auth(authorization)
+    for it in _load_installs():
+        if it.get("id") == iid:
+            p = config.INSTALLS_DIR / it["file"]
+            if p.exists():
+                return FileResponse(p, filename=it["file"],
+                                    media_type="application/octet-stream")
+    raise HTTPException(404, "install not found")
+
+
+class InstallReq(BaseModel):
+    pc: str
+    id: str
+
+
+@app.post("/install")
+def install(req: InstallReq):
+    """Queue an install on one PC. The agent downloads the asset and either runs it
+    (installer exe, with args) or unzips it to target (e.g. portable git)."""
+    it = next((x for x in _load_installs() if x.get("id") == req.id), None)
+    if not it:
+        raise HTTPException(404, "unknown install")
+    manifest.enqueue(req.pc, {
+        "type": "install", "install_id": it["id"], "name": it.get("name", it["id"]),
+        "url": f"/installs/{it['id']}/file", "file": it["file"],
+        "install_type": it.get("type", "run"), "args": it.get("args", []),
+        "target": it.get("target", "")})
+    return {"queued": True, "pc": req.pc, "id": req.id}
+
+
+@app.post("/agents/{pc_ip}/install-result")
+def install_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    _auth(authorization)
+    _install_results[pc_ip] = {"id": payload.get("id"), "ok": bool(payload.get("ok")),
+                               "msg": payload.get("msg", ""), "at": time.time()}
+    return {"ok": True}
 
 
 # ---- remote agent self-update -----------------------------------------
