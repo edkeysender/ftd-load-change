@@ -60,6 +60,9 @@ type Command struct {
 	InstallType string   `json:"install_type"` // run | unzip
 	Args        []string `json:"args"`         // silent-install flags for a run installer
 	Target      string   `json:"target"`       // unzip destination
+	// filediff: read one drifted file (version vs live) for the UI diff.
+	DiffApp  string `json:"diff_app"`
+	DiffPath string `json:"diff_path"`
 }
 
 // AppSpec mirrors one app entry from manifest.yaml. It is decoded both from the

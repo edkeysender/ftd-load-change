@@ -255,6 +255,75 @@ func (a *Agent) doDrift(c Command) {
 	a.api.DriftResult(a.cfg.PCIP, c.ReqID, DriftFiles(a.cfg, c.Apps))
 }
 
+// FileDiff carries one drifted file's contents (version vs live) for the UI diff.
+type FileDiff struct {
+	App     string `json:"app"`
+	Path    string `json:"path"`
+	Version string `json:"version"` // the deployed version's copy (repo worktree)
+	Live    string `json:"live"`    // what's actually on the PC now
+	Binary  bool   `json:"binary"`
+	TooBig  bool   `json:"too_big"`
+	Error   string `json:"error"`
+}
+
+// doFileDiff reads a single drifted file from both the deployed version and live so
+// the UI can show a line diff. Read-only.
+func (a *Agent) doFileDiff(c Command) {
+	res := FileDiff{App: c.DiffApp, Path: c.DiffPath}
+	spec, ok := c.Apps[c.DiffApp]
+	if !ok {
+		res.Error = "app not in the deployed manifest"
+		a.api.FileDiffResult(a.cfg.PCIP, c.ReqID, res)
+		return
+	}
+	const cap = 512 * 1024
+	labels := liveLabels(spec.Live)
+	found := false
+	for _, live := range spec.Live {
+		src := filepath.Join(a.cfg.RepoPath, filepath.FromSlash(spec.Repo))
+		if lbl := labels[live]; lbl != "" {
+			src = filepath.Join(src, lbl)
+		}
+		srcFile := filepath.Join(src, filepath.FromSlash(c.DiffPath))
+		liveFile := filepath.Join(filepath.FromSlash(live), filepath.FromSlash(c.DiffPath))
+		sInfo, sErr := os.Stat(srcFile)
+		lInfo, lErr := os.Stat(liveFile)
+		if sErr != nil && lErr != nil {
+			continue // this drifted file isn't under this live dir
+		}
+		found = true
+		if (sErr == nil && sInfo.Size() > cap) || (lErr == nil && lInfo.Size() > cap) {
+			res.TooBig = true
+			break
+		}
+		vb, _ := os.ReadFile(srcFile) // missing side reads as empty
+		lb, _ := os.ReadFile(liveFile)
+		if isBinaryContent(vb) || isBinaryContent(lb) {
+			res.Binary = true
+			break
+		}
+		res.Version, res.Live = string(vb), string(lb)
+		break
+	}
+	if !found {
+		res.Error = "file not found under the app"
+	}
+	a.api.FileDiffResult(a.cfg.PCIP, c.ReqID, res)
+}
+
+func isBinaryContent(b []byte) bool {
+	n := len(b)
+	if n > 8000 {
+		n = 8000
+	}
+	for i := 0; i < n; i++ {
+		if b[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *Agent) fail(err error) {
 	log.Printf("ERROR: %v", err)
 	a.mu.Lock()

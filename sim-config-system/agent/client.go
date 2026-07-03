@@ -284,6 +284,16 @@ func (c *Client) DriftResult(pcIP, reqID string, entries []DriftEntry) {
 	}
 }
 
+// FileDiffResult posts one file's version-vs-live contents for the UI diff.
+func (c *Client) FileDiffResult(pcIP, reqID string, d FileDiff) {
+	resp, err := c.do("POST", "/agents/"+pcIP+"/filediff-result", map[string]any{
+		"req_id": reqID, "diff": d,
+	})
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // PostSizeReport posts per-app byte sizes for the bootstrap panel.
 func (c *Client) PostSizeReport(pcIP, folder string, sizes map[string]int64) error {
 	resp, err := c.do("POST", "/agents/"+pcIP+"/size-report-result", map[string]any{

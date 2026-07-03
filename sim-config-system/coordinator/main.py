@@ -19,6 +19,8 @@ from . import config, db, discovery, git_ops, manifest
 _browse_requests: dict = {}
 # In-flight drift-diff requests (PC status "diff"): req_id -> {"event", "result"}
 _drift_requests: dict = {}
+# In-flight per-file diff requests (click a drifted file): req_id -> {"event", "result"}
+_filediff_requests: dict = {}
 
 # Live import/capture progress per PC: pc_ip -> {total_bytes, received_bytes, done}
 _import_progress: dict = {}
@@ -701,6 +703,34 @@ def drift_result(pc_ip: str, payload: dict = Body(...), authorization: str | Non
     req = _drift_requests.get(payload.get("req_id"))
     if req is not None:
         req["result"] = {"entries": payload.get("entries") or []}
+        req["event"].set()
+    return {"ok": True}
+
+
+@app.get("/agents/{pc_ip}/filediff")
+def filediff(pc_ip: str, app: str, path: str):
+    """Read one drifted file (version vs live) so the UI can show a line diff."""
+    req_id = uuid.uuid4().hex
+    ev = threading.Event()
+    _filediff_requests[req_id] = {"event": ev, "result": None}
+    try:
+        manifest.enqueue(pc_ip, {
+            "type": "filediff", "req_id": req_id, "diff_app": app, "diff_path": path,
+            "apps": manifest.resolved_apps(pc_ip, config.TRAINING_LIVE),
+            "git_remote": config.GIT_REMOTE})
+        if not ev.wait(20) or _filediff_requests[req_id]["result"] is None:
+            raise HTTPException(504, "agent did not respond (offline or busy)")
+        return _filediff_requests[req_id]["result"]
+    finally:
+        _filediff_requests.pop(req_id, None)
+
+
+@app.post("/agents/{pc_ip}/filediff-result")
+def filediff_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    _auth(authorization)
+    req = _filediff_requests.get(payload.get("req_id"))
+    if req is not None:
+        req["result"] = payload.get("diff") or {}
         req["event"].set()
     return {"ok": True}
 

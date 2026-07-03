@@ -612,14 +612,16 @@ function showAgentError(ip) {
     '<div style="color:#c0392b;font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;background:#fbe2e1;border-radius:8px;padding:10px;margin-top:8px">' + esc(msg) + '</div>';
   $('drift-modal').style.display = 'flex';
 }
+let driftCtx = { ip: '', entries: [] };  // last drift result, for click-to-diff
+const DRIFT_KIND = {
+  new:     { label: 'missing in live', color: '#c0392b' },  // version has it, live doesn't
+  changed: { label: 'modified',        color: '#99641a' },  // differs
+  extra:   { label: 'added in live',   color: '#5b3ea6' },  // live has it, version doesn't
+};
 function showDriftModal(ip, entries, err) {
   $('drift-title').textContent = 'Drift on ' + ip + ' — live vs deployed version';
+  driftCtx = { ip, entries: entries || [] };
   const body = $('drift-body');
-  const KIND = {
-    new:     { label: 'missing in live', color: '#c0392b' },  // version has it, live doesn't
-    changed: { label: 'modified',        color: '#99641a' },  // differs
-    extra:   { label: 'added in live',   color: '#5b3ea6' },  // live has it, version doesn't
-  };
   if (err) {
     body.innerHTML = '<div class="bad">' + esc(err) + '</div>';
   } else if (entries === null) {
@@ -628,23 +630,76 @@ function showDriftModal(ip, entries, err) {
     body.innerHTML = '<div class="ok">No differences — live matches the deployed version. (It may have just been re-synced.)</div>';
   } else {
     const byApp = {};
-    entries.forEach(e => { (byApp[e.app] = byApp[e.app] || []).push(e); });
+    entries.forEach((e, idx) => { (byApp[e.app] = byApp[e.app] || []).push({ e, idx }); });
     body.innerHTML =
-      '<div class="hint" style="margin-top:0">' + entries.length + ' differing path(s). ' +
-      '<span style="color:#c0392b">missing in live</span> = version has it, live doesn\'t · ' +
-      '<span style="color:#99641a">modified</span> · ' +
-      '<span style="color:#5b3ea6">added in live</span> = not in the version.</div>' +
-      Object.entries(byApp).map(([app, es]) =>
+      '<div class="hint" style="margin-top:0">' + entries.length + ' differing path(s) — click one to see the diff. ' +
+      '<span style="color:#c0392b">missing in live</span> · <span style="color:#99641a">modified</span> · <span style="color:#5b3ea6">added in live</span>.</div>' +
+      Object.entries(byApp).map(([app, items]) =>
         '<div style="margin-top:10px"><b>' + esc(app) + '</b>' +
-        es.map(e => {
-          const k = KIND[e.kind] || { label: e.kind, color: '#777' };
-          return '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 0;display:flex;gap:8px">' +
+        items.map(({ e, idx }) => {
+          const k = DRIFT_KIND[e.kind] || { label: e.kind, color: '#777' };
+          return '<div onclick="showFileDiff(' + idx + ')" style="cursor:pointer;font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:3px 6px;display:flex;gap:8px;border-radius:6px" onmouseover="this.style.background=\'#f3f1ea\'" onmouseout="this.style.background=\'\'">' +
             '<span style="color:' + k.color + ';min-width:96px;flex-shrink:0">' + esc(k.label) + '</span>' +
-            '<span style="word-break:break-all">' + esc(e.path) + '</span></div>';
+            '<span style="word-break:break-all;text-decoration:underline">' + esc(e.path) + '</span></div>';
         }).join('') + '</div>'
       ).join('');
   }
   $('drift-modal').style.display = 'flex';
+}
+async function showFileDiff(idx) {
+  const { ip, entries } = driftCtx;
+  const e = entries[idx];
+  if (!e) return;
+  $('drift-title').textContent = 'Diff — ' + e.path;
+  $('drift-body').innerHTML = '<div class="muted">Loading diff…</div>';
+  try {
+    const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/filediff?app=' +
+      encodeURIComponent(e.app) + '&path=' + encodeURIComponent(e.path));
+    renderFileDiff(e, d);
+  } catch (err) { $('drift-body').innerHTML = backToDrift() + '<div class="bad">' + esc(err.message) + '</div>'; }
+}
+const backToDrift = () => '<button class="ghost" style="margin-bottom:8px" onclick="driftPc(\'' + esc(driftCtx.ip) + '\')">← back to file list</button>';
+function renderFileDiff(e, d) {
+  const body = $('drift-body');
+  const back = backToDrift();
+  if (d.error) { body.innerHTML = back + '<div class="bad">' + esc(d.error) + '</div>'; return; }
+  if (d.too_big) { body.innerHTML = back + '<div class="muted">File too large to diff here.</div>'; return; }
+  if (d.binary) { body.innerHTML = back + '<div class="muted">Binary file — it differs, but there\'s no meaningful text diff.</div>'; return; }
+  const ver = d.version || '', live = d.live || '';
+  let rows;
+  if (ver.length + live.length > 2000000) {
+    rows = '<div class="muted">Too large for a line diff.</div>';
+  } else {
+    rows = diffLines(ver, live).map(l => {
+      const bg = l.t === '+' ? '#e1f5ee' : l.t === '-' ? '#fbe2e1' : 'transparent';
+      const col = l.t === '+' ? '#1d7a59' : l.t === '-' ? '#c0392b' : '#444';
+      return '<div style="background:' + bg + ';padding:0 6px;white-space:pre-wrap;color:' + col + '"><span style="opacity:.45">' + l.t + '</span> ' + esc(l.s) + '</div>';
+    }).join('');
+  }
+  body.innerHTML = back +
+    '<div class="hint" style="margin:0 0 6px"><span style="color:#c0392b">−</span> deployed version · <span style="color:#1d7a59">+</span> live on the PC</div>' +
+    '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #ece9e0;border-radius:8px;overflow:auto;max-height:56vh">' + rows + '</div>';
+}
+// Minimal LCS line diff. Caps size to avoid a huge DP table.
+function diffLines(aText, bText) {
+  const a = aText.split('\n'), b = bText.split('\n');
+  const n = a.length, m = b.length;
+  if (n > 3000 || m > 3000) {  // fall back: mark all removed then added
+    return a.map(s => ({ t: '-', s })).concat(b.map(s => ({ t: '+', s })));
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push({ t: ' ', s: a[i] }); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: '-', s: a[i] }); i++; }
+    else { out.push({ t: '+', s: b[j] }); j++; }
+  }
+  while (i < n) out.push({ t: '-', s: a[i++] });
+  while (j < m) out.push({ t: '+', s: b[j++] });
+  return out;
 }
 
 function seal() {
