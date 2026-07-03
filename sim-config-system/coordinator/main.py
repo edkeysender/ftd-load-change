@@ -5,6 +5,7 @@ read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
 import threading
+import time
 import uuid
 import yaml
 from pathlib import Path
@@ -79,7 +80,8 @@ def manifest_raw_save(req: ManifestRaw):
             raise HTTPException(400, f"pc {ip}: missing 'folder'")
         if not isinstance(spec.get("apps") or {}, dict):
             raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
-    git_ops.commit_manifest(req.yaml)
+    if git_ops.commit_manifest(req.yaml):
+        db.set_meta("manifest_saved_at", time.time())  # folders changed -> re-import needed
     return {"ok": True, "pcs": list(data["pcs"].keys())}
 
 
@@ -104,8 +106,9 @@ def manifest_json_save(body: dict = Body(...)):
     """Persist a manifest built by the UI (file browser). Dumped to YAML and
     committed to dev (comments not preserved — use the raw editor to keep them)."""
     _validate_manifest(body)
-    git_ops.commit_manifest(
-        yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True))
+    if git_ops.commit_manifest(
+            yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True)):
+        db.set_meta("manifest_saved_at", time.time())  # folders changed -> re-import needed
     return {"ok": True, "pcs": list(body["pcs"].keys())}
 
 
@@ -361,6 +364,35 @@ def dev_versions():
     return {"versions": db.list_dev_versions(), "training_live_sha": live}
 
 
+def _dev_readiness():
+    """Per-PC readiness for creating a dev version: has each PC in the load had its
+    content imported to dev since the last manifest change? Gates 'Deploy as Dev' so
+    a version can't be cut with a folder picked but never imported."""
+    pcs = manifest.load_manifest().get("pcs", {})
+    imports = {i["pc_ip"]: i for i in db.list_imports()}
+    agents = {a["pc_ip"]: a for a in db.list_agents()}
+    saved = float(db.get_meta("manifest_saved_at") or 0)
+    dev_exists = git_ops.ref_sha(config.DEV_BRANCH) is not None  # need v1.0 sealed first
+    rows, all_ready = [], True
+    for ip, spec in pcs.items():
+        imp = imports.get(ip)
+        imported_at = imp["imported_at"] if imp else None
+        stale = bool(imported_at) and imported_at < saved
+        ready = bool(imported_at) and not stale
+        if not ready:
+            all_ready = False
+        rows.append({"ip": ip, "folder": spec.get("folder"),
+                     "online": bool(agents.get(ip, {}).get("online")),
+                     "imported_at": imported_at, "stale": stale, "ready": ready})
+    return {"pcs": rows, "ready": all_ready and bool(pcs) and dev_exists,
+            "manifest_saved_at": saved}
+
+
+@app.get("/dev/readiness")
+def dev_readiness():
+    return _dev_readiness()
+
+
 class SnapshotReq(BaseModel):
     message: str
     author: str
@@ -368,8 +400,13 @@ class SnapshotReq(BaseModel):
 
 @app.post("/dev/snapshot")
 def dev_snapshot(req: SnapshotReq):
-    """Freeze the current dev tip as a named test version (dev-N) to deploy to the
-    sim for testing before promoting to a customer training version."""
+    """Freeze the current dev tip as a named test version (dev-vN) to deploy to the
+    sim for testing before promoting to a customer training version. Gated on
+    readiness so content is never skipped."""
+    r = _dev_readiness()
+    if not r["ready"]:
+        missing = [p["ip"] for p in r["pcs"] if not p["ready"]]
+        raise HTTPException(409, "import content first for: " + ", ".join(missing))
     tag = db.next_dev_tag()
     sha = git_ops.snapshot_dev(tag, req.message, req.author)
     db.record_dev_version(tag, req.message, req.author, sha or "")
@@ -468,8 +505,14 @@ def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     _auth(authorization)
     folder = payload["folder"]
     files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
+    # Before v1.0 there's no dev branch: stage into the working tree for the seal.
+    # After v1.0, import lands on dev and is committed, so it can feed a dev version.
+    dev_mode = git_ops.ref_sha(config.DEV_BRANCH) is not None
     if payload.get("batch_index", 0) == 0:
-        git_ops.clear_folder(folder)
+        if dev_mode:
+            git_ops.dev_import_begin(folder)
+        else:
+            git_ops.clear_folder(folder)
         _import_progress[pc_ip] = {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
                                    "received_bytes": 0, "received_files": 0, "done": False}
     git_ops.write_files(files)
@@ -478,6 +521,8 @@ def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     prog["received_bytes"] += sum(len(b) for b in files.values())
     prog["received_files"] += len(files)
     if payload.get("final", True):
+        if dev_mode:
+            git_ops.dev_import_commit(folder, f"import content for {pc_ip}", "import")
         prog["done"] = True
         n, b = git_ops.folder_stats(folder)
         db.record_import(pc_ip, folder, n, b, payload.get("missing", []))

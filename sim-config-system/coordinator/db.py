@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS dismissed_pcs (
     pc_ip      TEXT PRIMARY KEY,    -- manually removed from PC status; cleared when
     dismissed_at REAL               -- the agent next heartbeats (so it reappears)
 );
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,         -- small kv store (e.g. manifest_saved_at)
+    value TEXT
+);
 CREATE TABLE IF NOT EXISTS discovered_hosts (
     ip         TEXT PRIMARY KEY,    -- host found on the LAN (or manually added)
     hostname   TEXT,
@@ -221,6 +225,18 @@ def list_imports():
     for r in rows:
         r["missing"] = json.loads(r["missing"] or "[]")
     return rows
+
+
+# --- small kv store -----------------------------------------------------
+def set_meta(key, value):
+    with conn() as c:
+        c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, str(value)))
+
+
+def get_meta(key):
+    with conn() as c:
+        r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return r["value"] if r else None
 
 
 def record_size_report(pc_ip, folder, sizes):

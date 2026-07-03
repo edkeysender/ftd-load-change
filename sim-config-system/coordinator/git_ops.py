@@ -232,7 +232,10 @@ def rollback(tag: str):
 def commit_manifest(yaml_text: str, author: str = "config"):
     """Persist a manifest edit. If dev exists, commit it there (the draft branch),
     so Snapshot/Promote carry it into dev-N and v1.x. Before the first seal there's
-    no dev yet, so just write the working-tree file (sealed into v1.0 later)."""
+    no dev yet, so just write the working-tree file (sealed into v1.0 later).
+
+    Returns True if the manifest actually changed (a commit was made), else False —
+    lets callers stamp "manifest changed" only on real edits (dev-readiness gate)."""
     with _WRITE_LOCK:
         if _ref_exists("refs/heads/" + config.DEV_BRANCH):
             _git("checkout", config.DEV_BRANCH)
@@ -241,9 +244,32 @@ def commit_manifest(yaml_text: str, author: str = "config"):
             if _git("diff", "--cached", "--quiet", check=False).returncode != 0:
                 _git(*_ident(author), "commit", "-m", "config: update manifest")
                 _push(config.DEV_BRANCH)
-            return ref_sha(config.DEV_BRANCH)
+                return True
+            return False
         (config.WORK_CLONE / "manifest.yaml").write_text(yaml_text)
-        return None
+        return False
+
+
+def dev_import_begin(folder: str):
+    """Post-v1.0: start importing a PC's content straight onto dev. Check out dev
+    and clear the folder so the commit reflects the PC exactly (adds + deletions)."""
+    with _WRITE_LOCK:
+        _git("checkout", config.DEV_BRANCH)
+        target = config.WORK_CLONE / folder
+        if target.exists():
+            shutil.rmtree(target)
+
+
+def dev_import_commit(folder: str, message: str, author: str):
+    """Commit a freshly-imported PC folder to dev — the content the next dev version
+    will carry. `-A` stages deletions too, so removed files leave the version."""
+    with _WRITE_LOCK:
+        _git("checkout", config.DEV_BRANCH)
+        _git("add", "-A", "--", folder)
+        if _git("diff", "--cached", "--quiet", check=False).returncode != 0:
+            _git(*_ident(author), "commit", "-m", message)
+            _push(config.DEV_BRANCH)
+        return ref_sha(config.DEV_BRANCH)
 
 
 def snapshot_dev(tag: str, message: str, author: str):
