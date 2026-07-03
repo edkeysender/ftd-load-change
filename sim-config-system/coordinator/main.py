@@ -21,6 +21,10 @@ _browse_requests: dict = {}
 _import_progress: dict = {}
 _capture_progress: dict = {}
 
+# Live deploy/sync state per PC for the current deploy: pc_ip -> {state, ref, at}
+# state: "syncing" (command sent, agent working) | "ok" | "fail".
+_deploy_progress: dict = {}
+
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
 _update_pending: set = set()
@@ -159,6 +163,10 @@ def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
 
 
 def _enqueue_deploy_all():
+    ips = list(manifest.load_manifest()["pcs"])
+    _deploy_progress.clear()  # fresh deploy — start tracking sync per PC
+    for ip in ips:
+        _deploy_progress[ip] = {"state": "syncing", "at": time.time()}
     manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "deploy", config.TRAINING_LIVE))
 
 
@@ -166,7 +174,8 @@ def _enqueue_deploy_all():
 @app.get("/pcs")
 def pcs():
     return {"agents": db.list_agents(), "dev_lock": db.lock_holder(),
-            "capture_progress": _capture_progress, "dismissed": db.list_dismissed()}
+            "capture_progress": _capture_progress, "dismissed": db.list_dismissed(),
+            "deploy_progress": _deploy_progress}
 
 
 @app.get("/versions")
@@ -487,6 +496,9 @@ class Heartbeat(BaseModel):
 def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None)):
     _auth(authorization)
     db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version)
+    dp = _deploy_progress.get(hb.pc_ip)
+    if dp and dp.get("state") == "syncing" and hb.mode == "ERROR":
+        _deploy_progress[hb.pc_ip] = {"state": "fail", "at": time.time()}  # deploy failed
     return {"ok": True}
 
 
@@ -607,4 +619,5 @@ def deploy_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     _auth(authorization)
     db.upsert_agent(pc_ip, payload.get("folder", ""), payload.get("mode", "TRAINING"),
                     payload.get("ref"), payload.get("clean", True))
+    _deploy_progress[pc_ip] = {"state": "ok", "at": time.time()}  # this PC finished syncing
     return {"ok": True}

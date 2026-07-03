@@ -32,6 +32,7 @@
   .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px;
           font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
   .pill.training { background: #e1f5ee; color: #1d7a59; }
+  .pill.testing { background: #e7e2f7; color: #5b3ea6; }
   .pill.dev_tracking, .pill.deploying, .pill.capturing { background: #faeeda; color: #99641a; }
   .pill.unseeded, .pill.idle { background: #eee; color: #777; }
   .pill.error { background: #fbe2e1; color: #c0392b; }
@@ -89,6 +90,7 @@
     <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
       <button class="ghost" id="redeploy-testing-btn" style="margin-left:auto" onclick="redeployTesting()" disabled>Redeploy testing</button></h2>
     <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote to Master</b> to make one a customer training version.</div>
+    <div id="deploy-progress"></div>
     <table>
       <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
       <tbody id="devversions"></tbody>
@@ -237,6 +239,8 @@ const esc = s => (s == null ? '' : String(s)).replace(/[&<>"]/g, c => ({'&':'&am
 let MANIFEST = [];   // [{ip, folder, role, apps}]
 let DISMISSED = [];  // PC IPs manually removed from PC status (hidden until agent returns)
 let configDirty = false;  // selection edited but not yet Saved -> block dev deploy
+let LIVE = { tag: '', kind: 'TRAINING' };  // version training-live points at + its kind
+let DEPLOYPROG = {};  // per-PC sync state for the current deploy
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -252,12 +256,24 @@ async function refresh() {
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
   DISMISSED = (pcs && pcs.dismissed) || [];
+  DEPLOYPROG = (pcs && pcs.deploy_progress) || {};
+  // Resolve what training-live currently points at, so PC status shows the real
+  // running load (a v1.x = TRAINING, a dev-v1.x = TESTING) instead of the branch.
+  const liveSha = (vers && vers.training_live_sha) || (devvers && devvers.training_live_sha);
+  LIVE = { tag: '', kind: 'TRAINING' };
+  if (liveSha) {
+    const dv = ((devvers && devvers.versions) || []).find(x => x.commit_sha === liveSha);
+    const tv = ((vers && vers.versions) || []).find(x => x.commit_sha === liveSha);
+    if (dv) LIVE = { tag: dv.tag, kind: 'TESTING' };
+    else if (tv) LIVE = { tag: tv.tag, kind: 'TRAINING' };
+  }
   if (mpcs) {
     MANIFEST = mpcs.pcs;
     renderGrid(MANIFEST, agents);
     if (boot) renderBootstrap(MANIFEST, boot);
   }
   renderDevStepper(devready, boot && boot.progress);
+  renderDeployProgress(DEPLOYPROG, agents);
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
   if (devvers) renderDevVersions(devvers);
@@ -278,14 +294,18 @@ function renderGrid(pcs, agents) {
   });
   $('grid').innerHTML = rows.map(p => {
     const a = agents[p.ip] || {};
-    const mode = (a.mode || 'UNSEEDED');
-    const clean = a.mode === 'TRAINING' ? (a.clean ? '<span class="ok">clean</span>' : '<span class="bad">dirty</span>') : '';
+    // A deployed agent reports mode TRAINING + ref "training-live" whatever the load.
+    // Show the real running version and label it TRAINING vs TESTING by its kind.
+    const deployed = a.mode === 'TRAINING';
+    const mode = deployed ? (LIVE.kind || 'TRAINING') : (a.mode || 'UNSEEDED');
+    const ref = deployed && LIVE.tag ? LIVE.tag : (a.current_ref || '—');
+    const clean = deployed ? (a.clean ? '<span class="ok">clean</span>' : '<span class="bad">dirty</span>') : '';
     return `<tr>
       <td><b>${esc(p.ip)}</b><br><span class="muted">${esc(p.folder||'')}</span></td>
       <td>${esc(p.role||'')}</td>
       <td><span class="dot ${a.online?'on':'off'}"></span>${a.online?'online':'offline'}</td>
       <td><span class="pill ${mode.toLowerCase()}">${esc(mode)}</span></td>
-      <td>${esc(a.current_ref||'—')}</td>
+      <td>${esc(ref)}</td>
       <td>${clean}</td>
       <td class="muted">${ago(a.last_seen)}</td>
       <td><span class="muted" style="font-size:11px">${esc(a.version||'—')}</span>
@@ -431,9 +451,49 @@ function renderHosts(d) {
 
 // ---- actions ----
 async function act(fn, msg) { try { await fn(); if (msg) toast(msg); await refresh(); } catch (e) { toast(e.message, true); } }
-const deploy    = () => act(() => api('POST', '/deploy', {}), 'Re-deploying live to the sim…');
-const deployRef = t => confirm('Deploy ' + t + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: t }), 'Deploying ' + t + ' to the sim…');
-const redeployTesting = () => activeTestingTag && confirm('Re-sync ' + activeTestingTag + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: activeTestingTag }), 'Re-syncing ' + activeTestingTag + ' to the sim…');
+const deploy    = () => act(() => api('POST', '/deploy', {}), 'Re-deploying live to the sim…').then(pollDeploy);
+const deployRef = t => confirm('Deploy ' + t + ' to the whole sim?') && act(() => api('POST', '/deploy', { ref: t }), 'Deploying ' + t + ' to the sim…').then(pollDeploy);
+const redeployTesting = () => {
+  if (!activeTestingTag) return;
+  if (!confirm('Re-sync ' + activeTestingTag + ' to the whole sim?')) return;
+  act(() => api('POST', '/deploy', { ref: activeTestingTag }), 'Re-syncing ' + activeTestingTag + ' to the sim…').then(pollDeploy);
+};
+// Live sync bar for the current deploy: only differences are copied (robocopy /MIR),
+// and each PC flips syncing -> ✓ synced / ✗ failed as its agent reports back.
+function renderDeployProgress(dp, agents) {
+  const el = $('deploy-progress'); if (!el) return;
+  const ips = Object.keys(dp || {});
+  if (!ips.length) { el.innerHTML = ''; return; }
+  const done = ips.filter(ip => dp[ip].state !== 'syncing').length;
+  const failed = ips.some(ip => dp[ip].state === 'fail');
+  const pct = Math.round(100 * done / ips.length);
+  if (done === ips.length) {  // finished — keep the result visible briefly, then hide
+    const newest = Math.max(...ips.map(ip => dp[ip].at || 0));
+    if (Date.now() / 1000 - newest > 30) { el.innerHTML = ''; return; }
+  }
+  const chips = ips.map(ip => {
+    const s = dp[ip].state, a = (agents || {})[ip] || {};
+    let label = 'queued…', cls = 'muted';
+    if (s === 'ok') { label = '✓ synced'; cls = 'ok'; }
+    else if (s === 'fail') { label = '✗ failed'; cls = 'bad'; }
+    else if (a.mode === 'DEPLOYING') { label = 'syncing…'; cls = 'muted'; }
+    else if (!a.online) { label = 'offline — waiting'; cls = 'muted'; }
+    return `<span style="font-size:11px;margin-right:12px"><b>${esc(ip)}</b> <span class="${cls}">${label}</span></span>`;
+  }).join('');
+  el.innerHTML =
+    `<div class="hint" style="margin:8px 0 3px">${done === ips.length ? (failed ? 'Sync finished with errors' : 'Sync complete') : 'Syncing to sim'} — ${done}/${ips.length} PCs</div>
+     <div style="background:#ece9e0;border-radius:6px;height:8px;max-width:360px;overflow:hidden">
+       <div style="background:${failed ? '#c0392b' : '#1d7a59'};height:100%;width:${pct}%;transition:width .3s"></div></div>
+     <div style="margin-top:5px">${chips}</div>`;
+}
+async function pollDeploy() {
+  for (let i = 0; i < 150; i++) {                 // ~5 min at 2s while any PC still syncing
+    await refresh();
+    const ips = Object.keys(DEPLOYPROG);
+    if (!ips.length || ips.every(ip => DEPLOYPROG[ip].state !== 'syncing')) break;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
 function snapshotDev() {
   const author = requireUser();
   const msg = prompt('What does this dev test version contain?');
@@ -589,6 +649,8 @@ async function deployAsDev() {
     showMainTab('loads');                       // success → jump to Loads
     const dv = $('devversions');
     if (dv) dv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    pollDeploy();                               // animate the sync bar
+
   } catch (e) {
     setConfigStatus('failed: ' + e.message, 'bad');       // stay here, show why
     toast('Deploy as Dev failed: ' + e.message, true);
