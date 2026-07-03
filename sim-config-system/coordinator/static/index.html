@@ -77,7 +77,7 @@
   </section>
 
   <section>
-    <h2>Training versions <span class="muted" style="font-size:11px;font-weight:400">(customer)</span>
+    <h2>Training Loads <span class="muted" style="font-size:11px;font-weight:400">(customer)</span>
       <button class="ghost" style="margin-left:auto" onclick="deploy()">Re-deploy live</button></h2>
     <div class="hint">Immutable <code>v1.x</code> releases. <span class="live-badge">LIVE</span> = what the sim runs now. Deploy any to the whole sim.</div>
     <div id="deploy-progress-training"></div>
@@ -88,9 +88,9 @@
   </section>
 
   <section>
-    <h2>Development Versions <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
+    <h2>Development Loads <span class="muted" style="font-size:11px;font-weight:400">(admin)</span>
       <button class="ghost" id="redeploy-testing-btn" style="margin-left:auto" onclick="redeployTesting()" disabled>Redeploy testing</button></h2>
-    <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote to Master</b> to make one a customer training version.</div>
+    <div class="hint">Frozen <code>dev-v1.x</code> builds to deploy to the sim for testing, then <b>Promote To Training Load</b> to make one a customer training load.</div>
     <div id="deploy-progress"></div>
     <table>
       <thead><tr><th>Test version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
@@ -387,7 +387,7 @@ function renderDevVersions(v) {
       <td class="muted">${ago(x.created_at)}</td>
       <td class="row-actions">
         ${isLive ? '<span class="muted">on sim</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}
-        <button class="warn" onclick="promoteDev('${esc(x.tag)}')">Promote to Master</button>
+        <button class="warn" onclick="promoteDev('${esc(x.tag)}')">Promote To Training Load</button>
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="muted">No dev versions yet — create one in PC Images or here.</td></tr>';

@@ -639,8 +639,6 @@ class PromoteReq(BaseModel):
 
 @app.post("/promote")
 def promote(req: PromoteReq):
-    if db.lock_holder() and db.lock_holder() != req.author:
-        raise HTTPException(409, f"dev session held by {db.lock_holder()}")
     tag = db.next_version_tag()
     sha = git_ops.promote(req.message, req.author, tag, req.from_ref)
     db.record_version(tag, req.message, req.author, sha or "")

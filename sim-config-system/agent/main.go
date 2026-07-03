@@ -115,12 +115,13 @@ func (a *Agent) Run() {
 		if cmd, err := a.api.GetEnforce(); err != nil {
 			log.Printf("enforce-on-start: %v (will rely on polled commands)", err)
 		} else if cmd != nil {
-			if a.postUpdate {
-				// Just self-updated: adopt the deployed state WITHOUT re-syncing or
-				// restarting apps, so updating the agent never disrupts the sim.
+			// Don't redeploy when the agent is just restarted while the sim is already
+			// running (or right after a self-update): adopt the deployed state and wait
+			// for an explicit Deploy signal. Only a cold boot (sim down) deploys+launches.
+			if a.postUpdate || (repoCloned(a.cfg) && appsRunning(cmd.Apps)) {
 				a.remember(*cmd, CheckClean(a.cfg, cmd.Apps))
 				a.setState(StateTraining)
-				log.Printf("post-update: adopted %s without redeploy", cmd.Ref)
+				log.Printf("startup: adopted %s without redeploy (sim already running / post-update)", cmd.Ref)
 			} else {
 				log.Printf("enforce-on-start: deploying %s", cmd.Ref)
 				a.dispatch(*cmd)

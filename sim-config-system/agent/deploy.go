@@ -270,6 +270,31 @@ func robocopyMirror(src, dst string, xd, xf []string) error {
 	return nil
 }
 
+// repoCloned reports whether this PC has ever pulled the repo (so there's a
+// deployed worktree to adopt on startup).
+func repoCloned(cfg AgentConfig) bool {
+	_, err := os.Stat(filepath.Join(cfg.RepoPath, ".git"))
+	return err == nil
+}
+
+// appsRunning reports whether every launchable app's exe is currently running, so
+// startup can tell "agent restarted while the sim is up" (adopt, don't redeploy)
+// from "cold boot, sim is down" (deploy + launch).
+func appsRunning(apps map[string]AppSpec) bool {
+	exes := appExes(apps)
+	if len(exes) == 0 {
+		return false
+	}
+	out, _ := exec.Command("tasklist", "/FO", "CSV", "/NH").CombinedOutput()
+	running := strings.ToLower(string(out))
+	for exe := range exes {
+		if !strings.Contains(running, strings.ToLower(exe)) {
+			return false
+		}
+	}
+	return true
+}
+
 // appExes returns the distinct exe image names of the versioned, launchable apps.
 func appExes(apps map[string]AppSpec) map[string]bool {
 	exes := map[string]bool{}
