@@ -80,6 +80,7 @@
     <h2>Training versions <span class="muted" style="font-size:11px;font-weight:400">(customer)</span>
       <button class="ghost" style="margin-left:auto" onclick="deploy()">Re-deploy live</button></h2>
     <div class="hint">Immutable <code>v1.x</code> releases. <span class="live-badge">LIVE</span> = what the sim runs now. Deploy any to the whole sim.</div>
+    <div id="deploy-progress-training"></div>
     <table>
       <thead><tr><th>Version</th><th>Message</th><th>Author</th><th>When</th><th></th></tr></thead>
       <tbody id="versions"></tbody>
@@ -470,32 +471,46 @@ const redeployTesting = () => {
   if (!confirm('Re-sync ' + activeTestingTag + ' to the whole sim?')) return;
   act(() => api('POST', '/deploy', { ref: activeTestingTag }), 'Re-syncing ' + activeTestingTag + ' to the sim…').then(pollDeploy);
 };
-// Live sync bar for the current deploy: only differences are copied (robocopy /MIR),
-// and each PC flips syncing -> ✓ synced / ✗ failed as its agent reports back.
+const fmtEta = s => { s = Math.max(0, Math.round(s)); return s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's'; };
+// Live sync bar for the current deploy. % and ETA are projected from each PC's last
+// deploy time (until we've timed one, a 60s default is used). robocopy /MIR copies
+// only differences, so an unchanged redeploy finishes fast. Shown in both version lists.
 function renderDeployProgress(dp, agents) {
-  const el = $('deploy-progress'); if (!el) return;
-  const ips = Object.keys(dp || {});
-  if (!ips.length) { el.innerHTML = ''; return; }
+  const html = buildDeployProgress(dp || {}, agents || {});
+  ['deploy-progress', 'deploy-progress-training'].forEach(id => { const el = $(id); if (el) el.innerHTML = html; });
+}
+function buildDeployProgress(dp, agents) {
+  const ips = Object.keys(dp);
+  if (!ips.length) return '';
   const done = ips.filter(ip => dp[ip].state !== 'syncing').length;
   const failed = ips.some(ip => dp[ip].state === 'fail');
-  const pct = Math.round(100 * done / ips.length);
-  if (done === ips.length) {  // finished — keep the result visible briefly, then hide
+  if (done === ips.length) {  // finished — keep visible briefly, then auto-hide
     const newest = Math.max(...ips.map(ip => dp[ip].at || 0));
-    if (Date.now() / 1000 - newest > 30) { el.innerHTML = ''; return; }
+    if (Date.now() / 1000 - newest > 30) return '';
   }
+  let sumPct = 0, maxEta = 0;
   const chips = ips.map(ip => {
-    const s = dp[ip].state, a = (agents || {})[ip] || {};
-    let label = 'queued…', cls = 'muted';
-    if (s === 'ok') { label = '✓ synced'; cls = 'ok'; }
-    else if (s === 'fail') { label = '✗ failed'; cls = 'bad'; }
-    else if (a.mode === 'DEPLOYING') { label = 'syncing…'; cls = 'muted'; }
-    else if (!a.online) { label = 'offline — waiting'; cls = 'muted'; }
+    const d = dp[ip], a = agents[ip] || {};
+    let pct = 100, label = '✓ synced', cls = 'ok';
+    if (d.state === 'fail') { label = '✗ failed'; cls = 'bad'; }
+    else if (d.state === 'syncing') {
+      cls = 'muted';
+      const exp = d.expected || 60, el = d.elapsed || 0;   // 60s fallback until timed once
+      pct = Math.min(99, Math.round(100 * el / exp));
+      const eta = Math.max(0, exp - el);
+      maxEta = Math.max(maxEta, eta);
+      label = (a.online === false) ? 'offline — waiting' : ('syncing ' + pct + '% · ~' + fmtEta(eta) + ' left');
+    }
+    sumPct += pct;
     return `<span style="font-size:11px;margin-right:12px"><b>${esc(ip)}</b> <span class="${cls}">${label}</span></span>`;
   }).join('');
-  el.innerHTML =
-    `<div class="hint" style="margin:8px 0 3px">${done === ips.length ? (failed ? 'Sync finished with errors' : 'Sync complete') : 'Syncing to sim'} — ${done}/${ips.length} PCs</div>
+  const overall = Math.round(sumPct / ips.length);
+  const head = done === ips.length
+    ? (failed ? 'Sync finished with errors' : 'Sync complete')
+    : `Syncing to sim — ${overall}% · ~${fmtEta(maxEta)} left (${done}/${ips.length} PCs)`;
+  return `<div class="hint" style="margin:8px 0 3px">${head}</div>
      <div style="background:#ece9e0;border-radius:6px;height:8px;max-width:360px;overflow:hidden">
-       <div style="background:${failed ? '#c0392b' : '#1d7a59'};height:100%;width:${pct}%;transition:width .3s"></div></div>
+       <div style="background:${failed ? '#c0392b' : '#1d7a59'};height:100%;width:${overall}%;transition:width .3s"></div></div>
      <div style="margin-top:5px">${chips}</div>`;
 }
 async function pollDeploy() {

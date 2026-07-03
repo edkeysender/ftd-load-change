@@ -23,9 +23,11 @@ _drift_requests: dict = {}
 _import_progress: dict = {}
 _capture_progress: dict = {}
 
-# Live deploy/sync state per PC for the current deploy: pc_ip -> {state, ref, at}
+# Live deploy/sync state per PC for the current deploy: pc_ip -> {state, at, expected}
 # state: "syncing" (command sent, agent working) | "ok" | "fail".
 _deploy_progress: dict = {}
+# How long the last successful deploy took per PC (seconds) — projects % + ETA.
+_last_deploy_dur: dict = {}
 
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
@@ -167,17 +169,26 @@ def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
 def _enqueue_deploy_all():
     ips = list(manifest.load_manifest()["pcs"])
     _deploy_progress.clear()  # fresh deploy — start tracking sync per PC
+    now = time.time()
     for ip in ips:
-        _deploy_progress[ip] = {"state": "syncing", "at": time.time()}
+        _deploy_progress[ip] = {"state": "syncing", "at": now,
+                                "expected": _last_deploy_dur.get(ip)}  # None until first timing
     manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "deploy", config.TRAINING_LIVE))
 
 
 # ===================== UI / operator endpoints ==========================
 @app.get("/pcs")
 def pcs():
+    now = time.time()
+    dp_view = {}
+    for ip, d in _deploy_progress.items():
+        v = dict(d)
+        if d.get("state") == "syncing":
+            v["elapsed"] = now - d.get("at", now)  # server-computed, no clock-sync needed
+        dp_view[ip] = v
     return {"agents": db.list_agents(), "dev_lock": db.lock_holder(),
             "capture_progress": _capture_progress, "dismissed": db.list_dismissed(),
-            "deploy_progress": _deploy_progress}
+            "deploy_progress": dp_view}
 
 
 @app.get("/versions")
@@ -651,5 +662,8 @@ def deploy_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     _auth(authorization)
     db.upsert_agent(pc_ip, payload.get("folder", ""), payload.get("mode", "TRAINING"),
                     payload.get("ref"), payload.get("clean", True))
+    dp = _deploy_progress.get(pc_ip)
+    if dp and dp.get("state") == "syncing":
+        _last_deploy_dur[pc_ip] = time.time() - dp["at"]  # remember for the next ETA
     _deploy_progress[pc_ip] = {"state": "ok", "at": time.time()}  # this PC finished syncing
     return {"ok": True}
