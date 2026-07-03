@@ -19,39 +19,43 @@ import (
 	"time"
 )
 
-var gitOnce sync.Once
+var gitMu sync.Mutex
 var gitResolved string
 
 // gitExe returns the git executable. Explicit cfg.GitExe wins; otherwise we look on
 // PATH, then probe the standard Git-for-Windows install locations — a Windows
 // service often runs with a trimmed PATH that lacks git even when it's installed.
+// A successful result is cached; a miss is NOT, so installing git later is picked up
+// on the next deploy without restarting the agent.
 func gitExe(cfg AgentConfig) string {
 	if cfg.GitExe != "" {
 		return cfg.GitExe
 	}
-	gitOnce.Do(func() {
-		if p, err := exec.LookPath("git"); err == nil {
-			gitResolved = p
-			return
-		}
-		for _, c := range []string{
-			`C:\Program Files\Git\cmd\git.exe`,
-			`C:\Program Files\Git\bin\git.exe`,
-			`C:\Program Files (x86)\Git\cmd\git.exe`,
-			filepath.Join(os.Getenv("LOCALAPPDATA"), `Programs\Git\cmd\git.exe`),
-			filepath.Join(os.Getenv("ProgramFiles"), `Git\cmd\git.exe`),
-		} {
-			if c != "" {
-				if _, err := os.Stat(c); err == nil {
-					gitResolved = c
-					log.Printf("[git] using %s (not on PATH)", c)
-					return
-				}
+	gitMu.Lock()
+	defer gitMu.Unlock()
+	if gitResolved != "" {
+		return gitResolved
+	}
+	if p, err := exec.LookPath("git"); err == nil {
+		gitResolved = p
+		return gitResolved
+	}
+	for _, c := range []string{
+		`C:\Program Files\Git\cmd\git.exe`,
+		`C:\Program Files\Git\bin\git.exe`,
+		`C:\Program Files (x86)\Git\cmd\git.exe`,
+		filepath.Join(os.Getenv("LOCALAPPDATA"), `Programs\Git\cmd\git.exe`),
+		filepath.Join(os.Getenv("ProgramFiles"), `Git\cmd\git.exe`),
+	} {
+		if c != "" {
+			if _, err := os.Stat(c); err == nil {
+				gitResolved = c
+				log.Printf("[git] using %s (not on PATH)", c)
+				return gitResolved
 			}
 		}
-		gitResolved = "git" // not found — deploy will fail with a clear message
-	})
-	return gitResolved
+	}
+	return "git" // not found yet — don't cache; re-probe next deploy
 }
 
 // gitCmd runs git inside the local clone (cfg.RepoPath).
