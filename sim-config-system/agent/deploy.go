@@ -241,29 +241,13 @@ func StartApps(apps map[string]AppSpec) {
 	}
 }
 
-// CheckClean reports whether live matches the deployed ref (best-effort): a
-// robocopy /L (list-only) /MIR per live dir; any would-be copy/extra = drift.
+// CheckClean reports whether live matches the deployed ref. It uses the SAME
+// file-level comparison as the "diff" view (DriftFiles), so clean/dirty and the
+// diff can never disagree: dirty ⟺ at least one FILE differs. Directory-only or
+// timestamp quirks (which robocopy's exit code would flag) don't count as drift,
+// since this system versions files, not empty dirs.
 func CheckClean(cfg AgentConfig, apps map[string]AppSpec) bool {
-	for _, app := range apps {
-		if app.Repo == "" || len(app.Live) == 0 {
-			continue
-		}
-		xd, xf := robocopyExcludes(app.Exclude)
-		labels := liveLabels(app.Live)
-		for _, live := range app.Live {
-			src := filepath.Join(cfg.RepoPath, filepath.FromSlash(app.Repo))
-			if lbl := labels[live]; lbl != "" {
-				src = filepath.Join(src, lbl)
-			}
-			if _, err := os.Stat(src); err != nil {
-				continue
-			}
-			if drifted(src, filepath.FromSlash(live), xd, xf) {
-				return false
-			}
-		}
-	}
-	return true
+	return len(DriftFiles(cfg, apps)) == 0
 }
 
 // DriftEntry is one file that differs between the deployed version (repo worktree)
@@ -337,25 +321,4 @@ func driftDiff(src, dst string, xd, xf []string, app string) []DriftEntry {
 		entries = append(entries, DriftEntry{App: app, Kind: kind, Path: rel})
 	}
 	return entries
-}
-
-func drifted(src, dst string, xd, xf []string) bool {
-	args := []string{src, dst, "/MIR", "/L", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/R:0", "/W:0"}
-	for _, d := range xd {
-		args = append(args, "/XD", d)
-	}
-	if len(xf) > 0 {
-		args = append(args, "/XF")
-		args = append(args, xf...)
-	}
-	cmd := exec.Command("robocopy", args...)
-	_ = cmd.Run()
-	if cmd.ProcessState == nil {
-		return false
-	}
-	code := cmd.ProcessState.ExitCode()
-	if code >= 8 {
-		return false // listing error; don't flap to dirty
-	}
-	return code&0x3 != 0 // bit0 = copies needed, bit1 = extras in dest
 }
