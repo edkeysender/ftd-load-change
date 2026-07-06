@@ -22,5 +22,13 @@
     "assets": [],
     "check": "ssh-check.ps1",
     "apply": "ssh-apply.ps1"
+  },
+  {
+    "id": "vcredist",
+    "name": "VC++ Redistributables (x86 + x64)",
+    "desc": "Latest Visual C++ 2015-2022 runtimes, both architectures.",
+    "assets": ["vc_redist.x64.exe", "vc_redist.x86.exe"],
+    "check": "vcredist-check.ps1",
+    "apply": "vcredist-apply.ps1"
   }
 ]
