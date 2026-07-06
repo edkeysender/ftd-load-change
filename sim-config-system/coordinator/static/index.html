@@ -141,7 +141,7 @@
       <span class="hint" style="margin:0">Load = open an existing load · NEW = start a fresh dev load (pick from tree).</span>
     </div>
     <div id="tab-browser">
-      <div class="hint">Pick folders to <b>sync</b> per PC — check a folder to version it. No paths, no launch config (use the YAML tab for run/delay). Existing launch apps are preserved on save. (Needs the PC's agent online.)</div>
+      <div class="hint">Pick folders to <b>sync</b> per PC — check a folder to version it. <b>Uncheck a subfolder</b> to <span style="color:#c0392b">ignore</span> it (e.g. Navdata) — it won't be synced or removed on deploy. Launch config is on the YAML tab. (Needs the PC's agent online.)</div>
       <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <label style="font-size:13px">PC: <select id="browsePc" onchange="browsePcChanged()"></select></label>
         <button class="ghost" onclick="reloadTree()">⟳ Tree</button>
@@ -273,6 +273,7 @@ let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
 let selectedApps = new Map();    // live-path -> {name, run, start_delay, version}
+let excludedPaths = new Set();   // full paths (under a pick) to ignore = not synced, not deleted
 
 const safe = async p => { try { return await p; } catch (e) { return null; } };
 
@@ -897,6 +898,7 @@ function startNewDevLoad() {
     manifestObj.pcs[ip] = Object.assign({}, manifestObj.pcs[ip], { apps: {} });
   });
   selectedApps = new Map();
+  excludedPaths = new Set();
   configDirty = true;  // brand-new load — nothing saved yet
   if (browsePc) loadSelectedFromManifest(); else renderSelected();
   $('newload-label').textContent = '— new load: ' + (nextDevTag || 'dev-?');
@@ -1053,12 +1055,22 @@ function browsePcChanged() {
   reloadTree();
 }
 
+// A simple folder exclude like "Navdata/**" (a relative path, no globs) maps back
+// to a tree path; complex patterns ("**/*.log") are left untouched in the spec.
+const SIMPLE_EXCLUDE = /^([^*?]+)\/\*\*$/;
 function loadSelectedFromManifest() {
   selectedApps = new Map();
+  excludedPaths = new Set();
   const apps = (manifestObj.pcs[browsePc] || {}).apps || {};
   for (const [key, a] of Object.entries(apps)) {
     const p = (a.live && a.live[0]) || '';
-    if (p) selectedApps.set(p, { name: key, launch: !!a.run });
+    if (!p) continue;
+    selectedApps.set(p, { name: key, launch: !!a.run });
+    const base = p.replace(/\/+$/, '');
+    for (const pat of a.exclude || []) {
+      const m = SIMPLE_EXCLUDE.exec(pat);
+      if (m) excludedPaths.add(base + '/' + m[1]);  // "Navdata/**" -> <live>/Navdata
+    }
   }
   renderSelected();
 }
@@ -1104,8 +1116,7 @@ function makeNode(entry, depth) {
     row.appendChild(tog);
     const cb = document.createElement('input'); cb.type = 'checkbox';
     cb.dataset.path = entry.path;
-    if (selectedApps.has(entry.path)) { cb.checked = true; }
-    else if (selectedAncestorOf(entry.path)) { cb.checked = true; cb.disabled = true; } // covered by a checked parent
+    applyCbState(cb, entry.path);
     cb.onchange = () => toggleSelect(entry, cb.checked);
     row.appendChild(cb);
   } else {
@@ -1114,6 +1125,7 @@ function makeNode(entry, depth) {
   }
   const nm = document.createElement('span'); nm.textContent = entry.name;
   if (!entry.is_dir) nm.style.color = '#908e86';
+  if (entry.is_dir && excludedAncestorOf(entry.path)) { nm.style.color = '#c0392b'; nm.style.textDecoration = 'line-through'; nm.title = 'ignored — not synced, not removed'; }
   row.appendChild(nm);
   if (!entry.is_dir && entry.size) {
     const sz = document.createElement('span'); sz.className = 'muted'; sz.style.fontSize = '11px';
@@ -1132,32 +1144,54 @@ function selectedAncestorOf(path) {
   }
   return null;
 }
+// Return an excluded folder that is `path` itself or an ancestor of it, or null.
+function excludedAncestorOf(path) {
+  const p = (path || '').replace(/\/+$/, '');
+  for (const k of excludedPaths) {
+    const base = k.replace(/\/+$/, '');
+    if (base === p || p.startsWith(base + '/')) return k;
+  }
+  return null;
+}
+// Checkbox state for a tree path: picked = checked; under an ignored folder =
+// unchecked (ignored); under a pick = checked (uncheck to ignore); else unchecked.
+function applyCbState(cb, p) {
+  if (selectedApps.has(p)) { cb.checked = true; cb.disabled = false; }
+  else if (excludedAncestorOf(p)) { cb.checked = false; cb.disabled = false; }
+  else if (selectedAncestorOf(p)) { cb.checked = true; cb.disabled = false; }
+  else { cb.checked = false; cb.disabled = false; }
+}
 function toggleSelect(entry, checked) {
-  const path = entry.path;
-  if (checked) {
-    // Checking a folder covers all its children — drop any now-redundant descendant
-    // picks so the manifest keeps just the top folder.
-    const base = path.replace(/\/+$/, '');
+  const path = entry.path, base = path.replace(/\/+$/, '');
+  const underPick = selectedAncestorOf(path);
+  if (underPick) {
+    // A child of a picked folder: uncheck = ignore it, re-check = un-ignore.
+    if (checked) {
+      excludedPaths.delete(path);
+    } else {
+      for (const x of [...excludedPaths]) if (x.replace(/\/+$/, '').startsWith(base + '/')) excludedPaths.delete(x);
+      excludedPaths.add(path);
+    }
+  } else if (checked) {
+    // New top-level pick — drop redundant descendant picks.
     for (const k of [...selectedApps.keys()]) {
       if (k !== path && k.replace(/\/+$/, '').startsWith(base + '/')) selectedApps.delete(k);
     }
     if (!selectedApps.has(path)) selectedApps.set(path, { name: appKey(entry.name) });
   } else {
     selectedApps.delete(path);
+    for (const x of [...excludedPaths]) if (x.replace(/\/+$/, '').startsWith(base + '/')) excludedPaths.delete(x);
   }
   configDirty = true;  // selection changed -> must Save before deploying a dev version
   refreshTreeChecks();
   renderSelected();
 }
-// Reflect the selection across every rendered checkbox: an explicitly-picked folder
-// is checked + editable; a folder under a checked parent is checked + disabled
-// (included via the parent); everything else is unchecked.
 function refreshTreeChecks() {
   document.querySelectorAll('#tree input[type=checkbox]').forEach(cb => {
     const p = cb.dataset.path; if (!p) return;
-    if (selectedApps.has(p)) { cb.checked = true; cb.disabled = false; }
-    else if (selectedAncestorOf(p)) { cb.checked = true; cb.disabled = true; }
-    else { cb.checked = false; cb.disabled = false; }
+    applyCbState(cb, p);
+    const nm = cb.nextElementSibling, ex = excludedAncestorOf(p);
+    if (nm) { nm.style.color = ex ? '#c0392b' : ''; nm.style.textDecoration = ex ? 'line-through' : ''; nm.title = ex ? 'ignored — not synced, not removed' : ''; }
   });
 }
 function renderSelected() {
@@ -1171,11 +1205,17 @@ function renderSelected() {
     const folder = (manifestObj.pcs[ip] || {}).folder || '';
     const items = [];
     if (ip === browsePc) {
-      for (const [path, m] of selectedApps) items.push({ key: m.name, name: m.name, path, launch: !!m.launch });
+      for (const [path, m] of selectedApps) {
+        const root = path.replace(/\/+$/, '');
+        const ex = [...excludedPaths].filter(x => x.replace(/\/+$/, '').startsWith(root + '/'))
+          .map(x => x.replace(/\/+$/, '').slice(root.length + 1));
+        items.push({ key: m.name, name: m.name, path, launch: !!m.launch, excludes: ex });
+      }
     } else {
       const apps = (manifestObj.pcs[ip] || {}).apps || {};
       for (const [key, a] of Object.entries(apps)) {
-        items.push({ key, name: key, path: (a.live && a.live[0]) || '', launch: !!a.run });
+        const ex = (a.exclude || []).map(p => { const mm = SIMPLE_EXCLUDE.exec(p); return mm ? mm[1] : null; }).filter(Boolean);
+        items.push({ key, name: key, path: (a.live && a.live[0]) || '', launch: !!a.run, excludes: ex });
       }
     }
     if (items.length) groups.push({ ip, folder, items, current: ip === browsePc });
@@ -1201,7 +1241,9 @@ function renderSelected() {
       card.innerHTML =
         '<div style="min-width:0">' +
           '<b>' + esc(it.name) + '</b>' + (it.launch ? ' <span class="muted" style="font-size:10px">(launch app — kept)</span>' : '') +
-          '<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">' + esc(it.path) + '</div></div>' +
+          '<div class="muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">' + esc(it.path) + '</div>' +
+          (it.excludes && it.excludes.length ? '<div style="font-size:11px;color:#c0392b;margin-top:2px">ignored: ' + it.excludes.map(esc).join(', ') + '</div>' : '') +
+        '</div>' +
         '<button class="ghost" data-rm="1">remove</button>';
       card.querySelector('[data-rm]').onclick = () => removeSelected(g.ip, it.key, it.path);
       sec.appendChild(card);
@@ -1214,6 +1256,8 @@ function renderSelected() {
 function removeSelected(ip, key, path) {
   if (ip === browsePc) {
     selectedApps.delete(path);
+    const base = path.replace(/\/+$/, '');
+    for (const x of [...excludedPaths]) if (x.replace(/\/+$/, '').startsWith(base + '/')) excludedPaths.delete(x);
     refreshTreeChecks();  // re-enable any children that were implied by this folder
   } else if (manifestObj.pcs[ip] && manifestObj.pcs[ip].apps) {
     delete manifestObj.pcs[ip].apps[key];
@@ -1236,11 +1280,21 @@ function flushSelection() {
   const apps = {};
   for (const [path] of selectedApps) {
     const base = path.split('/').filter(Boolean).pop() || 'app';
-    if (byLive[path]) {
-      apps[byLive[path].key] = byLive[path].spec;        // keep existing (incl. run/delay)
-    } else {
-      apps[appKey(base)] = { live: [path], repo: folder + '/' + base };  // new = sync-only
+    const key = byLive[path] ? byLive[path].key : appKey(base);
+    const spec = byLive[path] ? Object.assign({}, byLive[path].spec)   // keep run/delay/etc.
+                              : { live: [path], repo: folder + '/' + base };
+    // Rebuild the exclude list: keep complex patterns from the spec, add the ignored
+    // subfolders (from the tree) as "<rel>/**" so they're neither synced nor removed.
+    const root = path.replace(/\/+$/, '');
+    const complex = (spec.exclude || []).filter(pt => !SIMPLE_EXCLUDE.test(pt));
+    const folderEx = [];
+    for (const x of excludedPaths) {
+      const xb = x.replace(/\/+$/, '');
+      if (xb.startsWith(root + '/')) folderEx.push(xb.slice(root.length + 1) + '/**');
     }
+    const ex = [...complex, ...folderEx];
+    if (ex.length) spec.exclude = ex; else delete spec.exclude;
+    apps[key] = spec;
   }
   manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps });
 }
