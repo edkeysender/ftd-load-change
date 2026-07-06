@@ -75,7 +75,7 @@ func resolveConfig(cfg *AgentConfig) {
 			log.Printf("identity from coordinator: %s (folder=%q)", ip, cfg.Folder)
 			return
 		}
-		log.Printf("waiting for coordinator at %s for identity: %v", cfg.CoordinatorURL, err)
+		log.Printf("waiting for coordinator instructions — %s not reachable yet, retrying…", cfg.CoordinatorURL)
 		time.Sleep(3 * time.Second)
 	}
 }
