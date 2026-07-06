@@ -578,7 +578,6 @@ async function driftPc(ip) {
     showDriftModal(ip, d.entries || []);
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
-const guardsChecked = new Set();  // PCs auto-checked once this session
 function renderGuards(data, agents) {
   const el = $('guards-list'); if (!el) return;
   const guards = (data && data.guards) || [];
@@ -612,10 +611,7 @@ function renderGuards(data, agents) {
     : '';
   const online = Object.values(agents || {}).filter(a => a.online);
   if (!online.length) { el.innerHTML = missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
-  // Auto-run the checks once per PC per session so the checklist populates.
-  online.forEach(a => {
-    if (!guardsChecked.has(a.pc_ip)) { guardsChecked.add(a.pc_ip); api('POST', '/guard/check-all', { pc: a.pc_ip }).catch(() => {}); }
-  });
+  // Checks run on the agent at launch and on the Recheck button — not auto from here.
   el.innerHTML = missHdr + online.map(a => {
     const ip = a.pc_ip, r = results[ip] || {};
     const rows = guards.map(g => {

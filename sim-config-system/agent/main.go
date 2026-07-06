@@ -129,6 +129,8 @@ func (a *Agent) Run() {
 		}
 	}
 
+	go a.runGuardChecks() // report compliance (wallpaper/git/ssh/…) on launch
+
 	for {
 		a.checkAndUpdate() // react to an "update" click on a running agent too
 		cmd, err := a.api.PollCommand() // long-poll

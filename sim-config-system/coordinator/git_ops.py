@@ -203,16 +203,20 @@ def capture_commit(deleted: list, message: str, author: str):
 
 
 def promote(message: str, author: str, new_tag: str, from_ref: str | None = None):
-    """Squash-merge a dev build into master, tag the new version, move training-live.
+    """Adopt a dev build as the new training version: make master's tree identical to
+    the promoted build, tag it, move training-live.
 
     `from_ref` is the source to promote (a specific dev-N test tag); defaults to the
-    dev branch tip. Promoting a tag freezes exactly that tested build as the new
-    customer training version, even if dev has moved on since."""
+    dev branch tip. Uses read-tree (not merge) so a build that differs from master in
+    files BOTH sides changed — e.g. manifest.yaml — promotes cleanly with no merge
+    conflicts. A training load == exactly that tested build's content."""
     src = from_ref or config.DEV_BRANCH
     with _WRITE_LOCK:
-        _git("checkout", config.MASTER)
-        _git("merge", "--squash", src)
+        _git("checkout", "-f", config.MASTER)        # clean switch, discard cruft
+        _git("read-tree", "-u", "--reset", src)       # master worktree/index := src's tree
         sha = commit_all(f"{new_tag}: {message}", author)
+        if sha is None:                               # tree identical to master already
+            sha = head_sha(config.MASTER)
         _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
         _git("branch", "-f", config.TRAINING_LIVE, new_tag)
         _push(config.MASTER, new_tag)

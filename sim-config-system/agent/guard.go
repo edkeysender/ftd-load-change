@@ -14,6 +14,20 @@ import (
 	"strings"
 )
 
+// runGuardChecks runs every guard's check once — called at agent launch so the
+// dashboard shows fresh pass/fail without the browser having to trigger it.
+func (a *Agent) runGuardChecks() {
+	guards, err := a.api.GetGuards()
+	if err != nil {
+		log.Printf("[guard] check-on-launch: %v", err)
+		return
+	}
+	for _, g := range guards {
+		a.doGuard(Command{Type: "guard", GuardID: g.ID, GuardKind: "check",
+			ScriptURL: "/guards/file/" + g.Check, ScriptName: g.Check})
+	}
+}
+
 func (a *Agent) doGuard(c Command) {
 	log.Printf("[guard] %s %s", c.GuardKind, c.GuardID)
 	dir, err := os.MkdirTemp("", "sim-guard-"+sanitizeName(c.GuardID))

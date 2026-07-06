@@ -284,6 +284,31 @@ func (c *Client) DriftResult(pcIP, reqID string, entries []DriftEntry) {
 	}
 }
 
+// GuardDef is the minimal guard info the agent needs to run its checks on launch.
+type GuardDef struct {
+	ID    string `json:"id"`
+	Check string `json:"check"`
+}
+
+// GetGuards fetches the guard definitions so the agent can self-check at startup.
+func (c *Client) GetGuards() ([]GuardDef, error) {
+	resp, err := c.do("GET", "/guards", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("guards: %s", resp.Status)
+	}
+	var out struct {
+		Guards []GuardDef `json:"guards"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Guards, nil
+}
+
 // GuardResult reports the outcome of a guard check/apply to the coordinator.
 func (c *Client) GuardResult(pcIP, id, kind string, ok bool, detail string) {
 	resp, err := c.do("POST", "/agents/"+pcIP+"/guard-result", map[string]any{

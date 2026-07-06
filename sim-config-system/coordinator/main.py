@@ -5,6 +5,7 @@ read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
 import json
+import subprocess
 import threading
 import time
 import uuid
@@ -667,7 +668,10 @@ class PromoteReq(BaseModel):
 @app.post("/promote")
 def promote(req: PromoteReq):
     tag = db.next_version_tag()
-    sha = git_ops.promote(req.message, req.author, tag, req.from_ref)
+    try:
+        sha = git_ops.promote(req.message, req.author, tag, req.from_ref)
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(400, "promote failed: " + (e.stderr or e.stdout or str(e)).strip())
     db.record_version(tag, req.message, req.author, sha or "")
     _enqueue_deploy_all()
     return {"tag": tag, "sha": sha}
