@@ -264,8 +264,15 @@ func robocopyMirror(src, dst string, xd, xf []string) error {
 	if cmd.ProcessState == nil {
 		return fmt.Errorf("robocopy did not run (Windows only): %s", out)
 	}
-	if code := cmd.ProcessState.ExitCode(); code >= 8 {
-		return fmt.Errorf("robocopy exit %d: %s", code, string(out))
+	code := cmd.ProcessState.ExitCode()
+	// robocopy exit bits: >=16 = fatal (abort). Bit 8 = some files couldn't be copied
+	// (locked / in-use by a running app) — robocopy already copied everything else, so
+	// we log and keep going instead of failing the whole deploy on a mapped .db-shm etc.
+	if code >= 16 {
+		return fmt.Errorf("robocopy fatal exit %d: %s", code, string(out))
+	}
+	if code&8 != 0 {
+		log.Printf("[mirror] WARN %s: some files are in use and were skipped (exit %d) — close the app to sync them", dst, code)
 	}
 	return nil
 }

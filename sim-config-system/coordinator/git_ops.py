@@ -1,10 +1,13 @@
 """Thin wrapper around git on the coordinator's working clone.
 This module is the ONLY place that commits, merges, tags, and pushes."""
+import re
 import shutil
 import subprocess
 import threading
 from pathlib import Path
 from . import config
+
+_PCT = re.compile(rb"(\d{1,3})%")  # progress % from git / git-lfs push stderr
 
 # Serializes every git-writing operation (stage/seal/capture/promote/rollback) so
 # concurrent requests — e.g. captures from .11 and .12 in one dev session — never
@@ -56,6 +59,32 @@ def _push_force(*refs):
     if not _has_remote():
         return
     _git("push", "--force", "origin", *refs, check=False)
+
+
+def _push_progress(refs, on_pct):
+    """Push `refs` while streaming git/git-lfs progress; on_pct(0-100) is called as
+    the LFS upload advances (the slow part of promote on a Pi). Best-effort."""
+    if not _has_remote():
+        return
+    proc = subprocess.Popen(
+        ["git", "-C", str(config.WORK_CLONE), "push", "--progress", "origin", *refs],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    buf = b""
+    while True:
+        ch = proc.stderr.read(1)  # progress uses \r; read char-by-char to catch updates
+        if not ch:
+            break
+        if ch in (b"\r", b"\n"):
+            m = _PCT.search(buf)
+            if m:
+                try:
+                    on_pct(min(100, int(m.group(1))))
+                except Exception:
+                    pass
+            buf = b""
+        else:
+            buf += ch
+    proc.wait()
 
 
 def publish_training_live():
@@ -202,7 +231,7 @@ def capture_commit(deleted: list, message: str, author: str):
         return commit_all(message, author)
 
 
-def promote(message: str, author: str, new_tag: str, from_ref: str | None = None):
+def promote(message: str, author: str, new_tag: str, from_ref: str | None = None, on_progress=None):
     """Adopt a dev build as the new training version: make master's tree identical to
     the promoted build, tag it, move training-live.
 
@@ -211,16 +240,27 @@ def promote(message: str, author: str, new_tag: str, from_ref: str | None = None
     files BOTH sides changed — e.g. manifest.yaml — promotes cleanly with no merge
     conflicts. A training load == exactly that tested build's content."""
     src = from_ref or config.DEV_BRANCH
+
+    def stage(name, pct):
+        if on_progress:
+            on_progress(name, pct)
+
     with _WRITE_LOCK:
+        stage("preparing", 5)
         _git("checkout", "-f", config.MASTER)        # clean switch, discard cruft
         _git("read-tree", "-u", "--reset", src)       # master worktree/index := src's tree
+        stage("committing", 15)
         sha = commit_all(f"{new_tag}: {message}", author)
         if sha is None:                               # tree identical to master already
             sha = head_sha(config.MASTER)
         _git(*_ident(author), "tag", "-a", new_tag, "-m", message)
         _git("branch", "-f", config.TRAINING_LIVE, new_tag)
-        _push(config.MASTER, new_tag)
+        stage("pushing", 20)
+        # 20..95% tracks the real LFS/objects upload to Forgejo (the slow part).
+        _push_progress([config.MASTER, new_tag], lambda p: stage("pushing", 20 + p * 75 // 100))
+        stage("publishing", 96)
         _push_force(config.TRAINING_LIVE)
+        stage("done", 100)
         return sha
 
 

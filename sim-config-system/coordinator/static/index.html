@@ -586,20 +586,29 @@ async function doPromote() {
   $('promote-close').style.display = 'none';
   $('promote-body').innerHTML =
     '<div style="padding:10px 0">' +
-    '<div class="hint" id="promote-status" style="margin:0 0 10px">Promoting <b>' + esc(promoteTag) + '</b>… creating the version and pushing to Forgejo. This can take a bit.</div>' +
-    '<div style="background:#ece9e0;border-radius:6px;height:9px;overflow:hidden"><div id="promote-bar" style="background:#99641a;height:100%;width:8%;transition:width .5s"></div></div></div>';
-  let w = 8;
-  const iv = setInterval(() => { w = Math.min(90, w + 4); const b = $('promote-bar'); if (b) b.style.width = w + '%'; }, 700);
+    '<div class="hint" id="promote-status" style="margin:0 0 10px">Starting…</div>' +
+    '<div style="background:#ece9e0;border-radius:6px;height:9px;overflow:hidden"><div id="promote-bar" style="background:#99641a;height:100%;width:2%;transition:width .4s"></div></div></div>';
+  const STAGE = { preparing: 'preparing', committing: 'committing', pushing: 'pushing to Forgejo (uploading LFS)', publishing: 'publishing', starting: 'starting', done: 'done' };
   try {
-    const r = await api('POST', '/promote', { message: msg, author, from_ref: promoteTag });
-    clearInterval(iv);
-    const b = $('promote-bar'); if (b) { b.style.width = '100%'; b.style.background = '#1d7a59'; }
-    $('promote-status').innerHTML = '✓ Created <b>' + esc(r.tag) + '</b> — deploying it to the sim now.';
-    promoteBusy = false; $('promote-close').style.display = '';
-    await refresh();
-    setTimeout(() => { closePromote(); showMainTab('loads'); pollDeploy(); }, 1300);
+    await api('POST', '/promote', { message: msg, author, from_ref: promoteTag });
+    for (let i = 0; i < 3600; i++) {                 // poll real progress
+      await new Promise(r => setTimeout(r, 1000));
+      let s; try { s = await api('GET', '/promote/status'); } catch (e) { continue; }
+      const pct = Math.max(0, Math.min(100, s.pct || 0));
+      const b = $('promote-bar'); if (b) b.style.width = pct + '%';
+      $('promote-status').innerHTML = 'Promoting <b>' + esc(s.tag || promoteTag) + '</b> — ' + esc(STAGE[s.stage] || s.stage || 'working') + ' · ' + pct + '%';
+      if (s.done) {
+        if (s.error) throw new Error(s.error);
+        if (b) { b.style.width = '100%'; b.style.background = '#1d7a59'; }
+        $('promote-status').innerHTML = '✓ Created <b>' + esc(s.tag) + '</b> — deploying it to the sim now.';
+        promoteBusy = false; $('promote-close').style.display = '';
+        await refresh();
+        setTimeout(() => { closePromote(); showMainTab('loads'); pollDeploy(); }, 1300);
+        return;
+      }
+    }
+    throw new Error('timed out waiting for promote');
   } catch (e) {
-    clearInterval(iv);
     const b = $('promote-bar'); if (b) b.style.background = '#c0392b';
     $('promote-status').innerHTML = '<span class="bad">Failed: ' + esc(e.message) + '</span>';
     promoteBusy = false; $('promote-close').style.display = '';

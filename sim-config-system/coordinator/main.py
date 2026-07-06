@@ -43,6 +43,9 @@ _install_results: dict = {}
 # an apply is running (pending re-check).
 _guard_results: dict = {}
 
+# Live promote progress (runs on a background thread; frontend polls /promote/status).
+_promote_progress: dict = {"active": False, "pct": 0, "stage": "", "tag": "", "error": "", "done": True}
+
 # PCs the operator asked to self-update; the agent checks this at startup (before
 # syncing) and on each poll, then acks to clear it (so no update loop).
 _update_pending: set = set()
@@ -703,14 +706,32 @@ class PromoteReq(BaseModel):
 
 @app.post("/promote")
 def promote(req: PromoteReq):
+    if _promote_progress.get("active"):
+        raise HTTPException(409, "a promote is already running")
     tag = db.next_version_tag()
+    _promote_progress.update({"active": True, "pct": 0, "stage": "starting",
+                              "tag": tag, "error": "", "done": False})
+    threading.Thread(target=_run_promote,
+                     args=(req.message, req.author, tag, req.from_ref), daemon=True).start()
+    return {"started": True, "tag": tag}
+
+
+def _run_promote(message, author, tag, from_ref):
     try:
-        sha = git_ops.promote(req.message, req.author, tag, req.from_ref)
+        sha = git_ops.promote(message, author, tag, from_ref,
+                              on_progress=lambda st, pct: _promote_progress.update({"stage": st, "pct": int(pct)}))
+        db.record_version(tag, message, author, sha or "")
+        _enqueue_deploy_all()
+        _promote_progress.update({"pct": 100, "stage": "done", "done": True, "active": False})
     except subprocess.CalledProcessError as e:
-        raise HTTPException(400, "promote failed: " + (e.stderr or e.stdout or str(e)).strip())
-    db.record_version(tag, req.message, req.author, sha or "")
-    _enqueue_deploy_all()
-    return {"tag": tag, "sha": sha}
+        _promote_progress.update({"error": (e.stderr or e.stdout or str(e)).strip(), "done": True, "active": False})
+    except Exception as e:  # noqa: BLE001 — surface any failure to the UI
+        _promote_progress.update({"error": str(e), "done": True, "active": False})
+
+
+@app.get("/promote/status")
+def promote_status():
+    return dict(_promote_progress)
 
 
 class RollbackReq(BaseModel):
