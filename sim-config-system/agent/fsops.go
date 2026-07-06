@@ -118,33 +118,66 @@ func globToRegex(glob string) string {
 // walkApp walks every live dir of an app, applying excludes, and calls fn for
 // each included regular file with its repo-relative path. Missing live dirs are
 // skipped (logged by the caller via the returned list of missing dirs).
+//
+// Unlike filepath.Walk, this FOLLOWS directory junctions/symlinks — ProSim and other
+// sims often put content behind a junction (e.g. a ProsimB738 reparse point), and
+// filepath.Walk would treat it as a non-dir and skip the whole subtree. A visited set
+// (resolved real path) prevents loops from cyclic junctions.
 func walkApp(live []string, excludes []string, fn func(repoRelPath, fullPath string, size int64) error) (missing []string, err error) {
 	labels := liveLabels(live)
 	for _, dir := range live {
-		info, statErr := os.Stat(dir)
+		info, statErr := os.Stat(dir) // os.Stat follows a junction/symlink to its target
 		if statErr != nil || !info.IsDir() {
 			missing = append(missing, dir)
 			continue
 		}
-		label := labels[dir]
-		walkErr := filepath.Walk(dir, func(path string, fi os.FileInfo, e error) error {
-			if e != nil {
-				return nil // skip unreadable entries rather than aborting the import
-			}
-			if fi.IsDir() {
-				return nil
-			}
-			rel := repoRel(label, dir, path)
-			if excluded(rel, excludes) {
-				return nil
-			}
-			return fn(rel, path, fi.Size())
-		})
-		if walkErr != nil {
-			return missing, walkErr
+		visited := map[string]bool{}
+		if werr := walkFollow(dir, dir, labels[dir], excludes, fn, visited); werr != nil {
+			return missing, werr
 		}
 	}
 	return missing, nil
+}
+
+// walkFollow recursively lists `path`, resolving each entry with os.Stat (which
+// follows junctions/symlinks), recursing into directories and calling fn on files.
+func walkFollow(root, path, label string, excludes []string,
+	fn func(string, string, int64) error, visited map[string]bool) error {
+	real, e := filepath.EvalSymlinks(path)
+	if e != nil || real == "" {
+		real = path
+	}
+	key := strings.ToLower(real)
+	if visited[key] {
+		return nil // already walked (cyclic junction)
+	}
+	visited[key] = true
+
+	entries, rerr := os.ReadDir(path)
+	if rerr != nil {
+		return nil // unreadable dir — skip, don't abort the whole import
+	}
+	for _, ent := range entries {
+		full := filepath.Join(path, ent.Name())
+		info, serr := os.Stat(full) // follow junctions to learn if it's really a dir
+		if serr != nil {
+			continue // broken link / unreadable
+		}
+		if info.IsDir() {
+			if err := walkFollow(root, full, label, excludes, fn, visited); err != nil {
+				return err
+			}
+			continue
+		}
+		rel := repoRel(label, root, full)
+		if excluded(rel, excludes) {
+			continue
+		}
+		if err := fn(rel, full, info.Size()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // dirSize returns the total bytes of an app's included files across its live dirs.
