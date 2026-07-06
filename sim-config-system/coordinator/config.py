@@ -37,6 +37,12 @@ GUARDS_DIR = Path(os.environ.get("SIM_GUARDS_DIR", str(Path(__file__).resolve().
 # SQLite state DB.
 DB_PATH = Path(os.environ.get("SIM_DB", "/srv/sim-config/coordinator.db"))
 
+# Global ignore: glob patterns merged into EVERY app's excludes (all PCs, all
+# versions) — junk like logs/temp that should never be versioned or deployed. Lives
+# outside the git checkout so it survives updates; seeded from the bundled default.
+GLOBAL_IGNORE = Path(os.environ.get("SIM_GLOBAL_IGNORE", "/srv/sim-config/global-ignore.yaml"))
+SEED_GLOBAL_IGNORE = _PROJECT_ROOT / "global-ignore.yaml"
+
 # Branch / ref names.
 TRAINING_LIVE = "training-live"   # movable pointer = what is deployed now
 DEV_BRANCH = "dev"

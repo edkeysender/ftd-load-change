@@ -201,6 +201,17 @@
     <div id="guards-list"></div>
   </section>
 
+  <section style="order:5">
+    <h2>Global ignore <span class="muted" style="font-size:11px;font-weight:400">(all PCs, all loads)</span></h2>
+    <div class="hint">Glob patterns ignored everywhere — never synced, deployed, or flagged as drift (e.g. logs, temp). A YAML list, one <code>- "pattern"</code> per line. <code>**</code> = any depth, <code>*</code> = within a name.</div>
+    <textarea id="global-ignore" spellcheck="false"
+      style="width:100%;height:190px;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;resize:vertical;box-sizing:border-box"></textarea>
+    <div class="row-actions" style="margin-top:8px;align-items:center">
+      <button onclick="saveGlobalIgnore()">Save global ignore</button>
+      <span id="gi-status" class="hint" style="margin:0"></span>
+    </div>
+  </section>
+
   </div><!-- /maintab-config -->
 
 </div>
@@ -872,6 +883,17 @@ async function saveManifest() {
     refresh();
   } catch (e) { setManifestStatus('rejected: ' + e.message, 'bad'); }
 }
+const setGiStatus = (m, c) => { const e = $('gi-status'); if (e) { e.textContent = m; e.className = 'hint ' + (c || ''); } };
+async function loadGlobalIgnore() {
+  try { const d = await api('GET', '/global-ignore'); if ($('global-ignore')) $('global-ignore').value = d.text || ''; }
+  catch (e) { setGiStatus('load failed: ' + e.message, 'bad'); }
+}
+async function saveGlobalIgnore() {
+  try {
+    const d = await api('PUT', '/global-ignore', { text: $('global-ignore').value });
+    setGiStatus('saved ✓ — ' + (d.patterns || []).length + ' patterns (applies to all PCs)', 'ok');
+  } catch (e) { setGiStatus('rejected: ' + e.message, 'bad'); }
+}
 
 // ---- configuration: file browser ----
 let nextDevTag = '';   // next dev-v1.x label, computed from /dev/versions
@@ -1323,6 +1345,7 @@ showMainTab(localStorage.getItem('simMainTab') || 'loads');  // restore last tab
 showConfigTab('browser');  // default config sub-tab (view only)
 loadConfig();              // load browser data once
 loadManifest();            // load YAML once (tab switches no longer reload)
+loadGlobalIgnore();        // load the global ignore editor once
 setInterval(refresh, 5000);
 </script>
 </body>

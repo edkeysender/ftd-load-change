@@ -1,0 +1,16 @@
+# Global ignore — glob patterns applied to EVERY synced folder on EVERY PC, on top
+# of the manifest defaults and per-app excludes. Files/dirs matching these are never
+# imported into a version, never mirrored on deploy, and never flagged as drift.
+#
+# Glob syntax:  ** = any depth, * = within a name segment, ? = one char.
+# Edit here or in the dashboard (Configuration -> Global ignore).
+- "**/*.log"
+- "**/log*.txt"      # log-System.txt, logdbbuild.txt, …
+- "**/logs/**"
+- "**/Logs/**"
+- "**/*.tmp"
+- "**/*.lock"
+- "**/cache/**"
+- "**/Cache/**"
+- "**/crashes/**"
+- "**/CrashDumps/**"

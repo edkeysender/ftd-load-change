@@ -34,21 +34,35 @@ def pc_folder(pc_ip, ref=None):
     return _manifest(ref).get("pcs", {}).get(pc_ip, {}).get("folder")
 
 
+def load_global_ignore():
+    """The global-ignore glob list — applies to every app on every PC. Reads the
+    writable file, falling back to the bundled seed. Always a list of strings."""
+    from . import config
+    for path in (config.GLOBAL_IGNORE, config.SEED_GLOBAL_IGNORE):
+        try:
+            if path and path.exists():
+                data = yaml.safe_load(path.read_text()) or []
+                return [str(p) for p in data if p]
+        except Exception:
+            pass
+    return []
+
+
 def resolved_apps(pc_ip: str, ref=None) -> dict:
-    """Apps for a PC with the default exclude set merged into each app's own
-    excludes (defaults first, dedup, order preserved). Read from `ref`'s manifest
-    when given, so each version syncs its own file set. Empty if the PC isn't in
-    that manifest."""
+    """Apps for a PC with the global-ignore + manifest defaults merged into each
+    app's own excludes (in that order, dedup, order preserved). Read from `ref`'s
+    manifest when given. Empty if the PC isn't in that manifest."""
     m = _manifest(ref)
     pc = m.get("pcs", {}).get(pc_ip)
     if not pc:
         return {}
     defaults = m.get("defaults", {}).get("exclude", []) or []
+    global_ignore = load_global_ignore()
     apps = {}
     for name, spec in (pc.get("apps") or {}).items():
         spec = dict(spec)
         merged, seen = [], set()
-        for pat in defaults + (spec.get("exclude") or []):
+        for pat in global_ignore + defaults + (spec.get("exclude") or []):
             if pat not in seen:
                 seen.add(pat)
                 merged.append(pat)

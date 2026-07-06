@@ -147,6 +147,42 @@ def manifest_at(ref: str):
 def _startup():
     db.init()
     git_ops.ensure_repo()  # local git init, or clone if a Forgejo remote is configured
+    # Seed the writable global-ignore from the bundled default on first run.
+    try:
+        if not config.GLOBAL_IGNORE.exists() and config.SEED_GLOBAL_IGNORE.exists():
+            config.GLOBAL_IGNORE.parent.mkdir(parents=True, exist_ok=True)
+            config.GLOBAL_IGNORE.write_text(config.SEED_GLOBAL_IGNORE.read_text())
+    except Exception:
+        pass
+
+
+@app.get("/global-ignore")
+def global_ignore_get():
+    """Raw text + parsed list of the global ignore patterns."""
+    text = ""
+    for path in (config.GLOBAL_IGNORE, config.SEED_GLOBAL_IGNORE):
+        if path and path.exists():
+            text = path.read_text()
+            break
+    return {"text": text, "patterns": manifest.load_global_ignore()}
+
+
+class GlobalIgnoreReq(BaseModel):
+    text: str
+
+
+@app.put("/global-ignore")
+def global_ignore_put(req: GlobalIgnoreReq):
+    """Save the global ignore file. Validated as a YAML list of strings."""
+    try:
+        data = yaml.safe_load(req.text) or []
+    except Exception as e:
+        raise HTTPException(400, f"YAML parse error: {e}")
+    if not isinstance(data, list) or any(not isinstance(p, str) for p in data):
+        raise HTTPException(400, "must be a YAML list of glob strings")
+    config.GLOBAL_IGNORE.parent.mkdir(parents=True, exist_ok=True)
+    config.GLOBAL_IGNORE.write_text(req.text)
+    return {"ok": True, "patterns": data}
 
 
 def _auth(token: str | None):
