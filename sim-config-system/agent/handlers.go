@@ -123,6 +123,16 @@ func (a *Agent) doDeploy(c Command) {
 		a.fail(err)
 		return
 	}
+	// Fast path: if live already matches this version AND the apps are running, there's
+	// nothing to sync or restart — skip the stop/mirror/restart cycle (which otherwise
+	// costs the apps' start_delay every time, even with no changes).
+	if appsRunning(c.Apps) && CheckClean(a.cfg, c.Apps) {
+		a.remember(c, true)
+		a.setState(StateTraining)
+		a.api.DeployResult(a.cfg.PCIP, c.Folder, "TRAINING", c.Ref, true)
+		log.Printf("[deploy] %s already in sync — no restart", c.Ref)
+		return
+	}
 	StopApps(c.Apps)                                  // stop first: nothing runs during sync
 	if err := MirrorToLive(a.cfg, c.Apps); err != nil { // worktree -> live, honoring excludes
 		a.fail(err)
