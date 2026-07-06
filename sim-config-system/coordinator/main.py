@@ -753,12 +753,31 @@ def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
     prog["received_bytes"] += sum(len(b) for b in files.values())
     prog["received_files"] += len(files)
     if payload.get("final", True):
-        if dev_mode:
-            git_ops.dev_import_commit(folder, f"import content for {pc_ip}", "import")
-        prog["done"] = True
         n, b = git_ops.folder_stats(folder)
-        db.record_import(pc_ip, folder, n, b, payload.get("missing", []))
+        missing = payload.get("missing", [])
+        if dev_mode:
+            # git add (hashing GBs) + commit + LFS push can take minutes — do it in the
+            # background so the agent's final-batch request returns immediately, and
+            # surface a "committing" phase to the UI instead of a stuck 100% bar.
+            prog["committing"] = True
+            threading.Thread(target=_finalize_dev_import,
+                             args=(pc_ip, folder, n, b, missing), daemon=True).start()
+        else:
+            prog["done"] = True
+            db.record_import(pc_ip, folder, n, b, missing)
     return {"staged_files": len(files), "batch": payload.get("batch_index", 0)}
+
+
+def _finalize_dev_import(pc_ip: str, folder: str, n: int, b: int, missing: list):
+    """Commit + push a completed dev import off the request thread."""
+    try:
+        git_ops.dev_import_commit(folder, f"import content for {pc_ip}", "import")
+    finally:
+        db.record_import(pc_ip, folder, n, b, missing)
+        prog = _import_progress.get(pc_ip)
+        if prog is not None:
+            prog["committing"] = False
+            prog["done"] = True
 
 
 @app.post("/agents/{pc_ip}/size-report-result")

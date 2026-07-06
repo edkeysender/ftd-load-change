@@ -948,7 +948,9 @@ function renderDevStepper(r, prog) {
       const cp = prog[p.ip];
       if (cp) importStarting.delete(p.ip);  // real progress arrived — no longer "starting"
       let right;
-      if (cp && !cp.done) {
+      if (cp && !cp.done && cp.committing) {
+        right = `<span class="muted" style="font-size:12px">committing to version… <span style="opacity:.7">(hashing + LFS push; can take a few min for large loads)</span></span>`;
+      } else if (cp && !cp.done) {
         const pct = cp.total_bytes ? Math.min(100, Math.round(100 * cp.received_bytes / cp.total_bytes)) : 0;
         right = `<span class="muted" style="font-size:12px">importing… ${fmtBytes(cp.received_bytes)} / ${fmtBytes(cp.total_bytes)} (${pct}%)</span>`;
       } else if (importStarting.has(p.ip)) {
