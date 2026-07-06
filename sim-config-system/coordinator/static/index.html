@@ -214,6 +214,15 @@
     <div id="drift-body"></div>
   </div>
 </div>
+<div id="promote-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closePromote()">
+  <div style="background:#fff;border-radius:12px;max-width:520px;width:90%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <b id="promote-title">Promote</b>
+      <button class="ghost" id="promote-close" style="margin-left:auto" onclick="closePromote()">Cancel</button>
+    </div>
+    <div id="promote-body"></div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -541,12 +550,48 @@ function snapshotDev() {
   if (!msg) return;
   act(() => api('POST', '/dev/snapshot', { message: msg, author }), 'Snapshotting dev → test version…');
 }
+// Promote wizard: step 1 collects a message, step 2 shows progress until done.
+let promoteBusy = false, promoteTag = '';
 function promoteDev(tag) {
-  const author = requireUser();
-  if (!confirm('Promote ' + tag + ' to a new customer training version (and make it live on the sim)?')) return;
-  const msg = prompt('Training version message (what this build delivers):', tag);
-  if (!msg) return;
-  act(() => api('POST', '/promote', { message: msg, author, from_ref: tag }), 'Promoting ' + tag + ' → new training version…');
+  promoteTag = tag; promoteBusy = false;
+  $('promote-title').textContent = 'Promote ' + tag + ' → Training Load';
+  $('promote-close').style.display = '';
+  $('promote-body').innerHTML =
+    '<div class="hint" style="margin-top:0">Freezes <b>' + esc(tag) + '</b> as a new customer training load (next v1.x) and deploys it to the sim.</div>' +
+    '<label style="display:block;font-size:13px;margin:12px 0 4px">Version message — what this build delivers:</label>' +
+    '<input id="promote-msg" style="width:100%;padding:8px;border:1px solid #d3d1c7;border-radius:8px;box-sizing:border-box" value="' + esc(tag) + '">' +
+    '<div class="row-actions" style="margin-top:14px"><button onclick="doPromote()">Save &amp; promote</button></div>';
+  $('promote-modal').style.display = 'flex';
+  setTimeout(() => { const m = $('promote-msg'); if (m) { m.focus(); m.select(); } }, 40);
+}
+function closePromote() { if (!promoteBusy) $('promote-modal').style.display = 'none'; }
+async function doPromote() {
+  const author = who();
+  if (!author) { toast('Enter your name (top right) first', true); return; }
+  const msg = ($('promote-msg').value || '').trim();
+  if (!msg) { toast('Enter a version message', true); return; }
+  promoteBusy = true;
+  $('promote-close').style.display = 'none';
+  $('promote-body').innerHTML =
+    '<div style="padding:10px 0">' +
+    '<div class="hint" id="promote-status" style="margin:0 0 10px">Promoting <b>' + esc(promoteTag) + '</b>… creating the version and pushing to Forgejo. This can take a bit.</div>' +
+    '<div style="background:#ece9e0;border-radius:6px;height:9px;overflow:hidden"><div id="promote-bar" style="background:#99641a;height:100%;width:8%;transition:width .5s"></div></div></div>';
+  let w = 8;
+  const iv = setInterval(() => { w = Math.min(90, w + 4); const b = $('promote-bar'); if (b) b.style.width = w + '%'; }, 700);
+  try {
+    const r = await api('POST', '/promote', { message: msg, author, from_ref: promoteTag });
+    clearInterval(iv);
+    const b = $('promote-bar'); if (b) { b.style.width = '100%'; b.style.background = '#1d7a59'; }
+    $('promote-status').innerHTML = '✓ Created <b>' + esc(r.tag) + '</b> — deploying it to the sim now.';
+    promoteBusy = false; $('promote-close').style.display = '';
+    await refresh();
+    setTimeout(() => { closePromote(); showMainTab('loads'); pollDeploy(); }, 1300);
+  } catch (e) {
+    clearInterval(iv);
+    const b = $('promote-bar'); if (b) b.style.background = '#c0392b';
+    $('promote-status').innerHTML = '<span class="bad">Failed: ' + esc(e.message) + '</span>';
+    promoteBusy = false; $('promote-close').style.display = '';
+  }
 }
 function bootstrapAction(pc, path, label) {
   api('POST', path, {})
