@@ -982,11 +982,34 @@ function startNewDevLoad() {
 // deployed there (training-live). This is the real "what did I change" — asks every PC's
 // agent for its drift and aggregates. From here, Deploy captures + versions those edits.
 let reviewDrift = {};   // ip -> drift entries
+// Config diff: folders/ignores you changed in the load vs a baseline manifest.
+function manifestDiff(a, b) {
+  const out = [], aPcs = (a && a.pcs) || {}, bPcs = (b && b.pcs) || {};
+  const byLive = apps => { const m = {}; Object.values(apps || {}).forEach(x => { const p = (x.live && x.live[0]) || ''; if (p) m[p] = x; }); return m; };
+  new Set([...Object.keys(aPcs), ...Object.keys(bPcs)]).forEach(ip => {
+    const A = byLive((aPcs[ip] || {}).apps), B = byLive((bPcs[ip] || {}).apps);
+    new Set([...Object.keys(A), ...Object.keys(B)]).forEach(p => {
+      if (!A[p]) out.push({ color: '#1d7a59', text: '＋ add folder   ' + ip + '  ' + p });
+      else if (!B[p]) out.push({ color: '#c0392b', text: '－ remove folder ' + ip + '  ' + p });
+      else {
+        const ae = (A[p].exclude || []).join(', '), be = (B[p].exclude || []).join(', ');
+        if (ae !== be) out.push({ color: '#99641a', text: '~ ignore change  ' + ip + '  ' + p + '  → [' + be + ']' });
+      }
+    });
+  });
+  return out;
+}
 async function reviewChanges() {
+  flushSelection();  // fold the on-screen PC's tree selection into manifestObj first
   const ref = LIVE.tag || lastDevTag || 'the deployed version';
-  $('drift-title').textContent = 'Review changes — your live edits vs ' + ref;
-  $('drift-body').innerHTML = '<div class="muted">Asking each PC what changed live…</div>';
+  $('drift-title').textContent = 'Review changes — vs ' + ref;
+  $('drift-body').innerHTML = '<div class="muted">Comparing config + asking each PC what changed live…</div>';
   $('drift-modal').style.display = 'flex';
+  // 1) config changes (folders / ignores) vs the deployed version's manifest
+  let base = { pcs: {} };
+  try { base = (await api('GET', '/manifest/at?ref=' + encodeURIComponent(ref))).manifest || { pcs: {} }; } catch (e) {}
+  const cfg = manifestDiff(base, manifestObj || { pcs: {} });
+  // 2) live file edits per PC
   const ips = Object.keys((manifestObj && manifestObj.pcs) || {});
   if (!ips.length) { $('drift-body').innerHTML = '<div class="muted">No PCs in this load.</div>'; return; }
   reviewDrift = {};
@@ -994,10 +1017,14 @@ async function reviewChanges() {
     try { const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/drift'); reviewDrift[ip] = d.entries || []; return { ip, entries: d.entries || [] }; }
     catch (e) { return { ip, error: e.message }; }
   }));
-  renderReview(ref, results);
+  renderReview(ref, cfg, results);
 }
-function renderReview(ref, results) {
-  const total = results.reduce((n, r) => n + (r.entries ? r.entries.length : 0), 0);
+function renderReview(ref, cfg, results) {
+  const total = (cfg ? cfg.length : 0) + results.reduce((n, r) => n + (r.entries ? r.entries.length : 0), 0);
+  const cfgBlock = (cfg && cfg.length)
+    ? '<div style="margin-top:6px"><b>Configuration changes</b> <span class="muted" style="font-size:12px">— folders / ignores you added or removed (content is captured on Deploy)</span>' +
+      cfg.map(d => '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 6px;color:' + d.color + '">' + esc(d.text) + '</div>').join('') + '</div>'
+    : '';
   const pcBlocks = results.map(r => {
     const head = '<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>' + esc(r.ip) + '</b>';
     if (r.error) return head + ' <span class="bad" style="font-size:12px">offline / busy — can\'t check</span></div>';
@@ -1015,11 +1042,12 @@ function renderReview(ref, results) {
         }).join('') + '</div>'
       ).join('');
   }).join('');
-  const legend = '<div class="hint" style="margin-top:0"><span style="color:#c0392b">missing in live</span> · <span style="color:#99641a">modified</span> · <span style="color:#5b3ea6">added in live</span> — click a file for its diff.</div>';
+  const liveHdr = '<div style="margin-top:14px"><b>Live file changes</b> <span class="hint" style="margin:0">— edits made directly on the PCs vs <b>' + esc(ref) + '</b>. ' +
+    '<span style="color:#c0392b">missing in live</span> · <span style="color:#99641a">modified</span> · <span style="color:#5b3ea6">added in live</span> — click a file for its diff.</span></div>';
   const deployBtn = total
     ? '<button class="warn" style="width:100%;font-size:14px" onclick="closeDriftModal();deployAsDevLoad()">Deploy — capture these changes into a new dev version</button>'
-    : '<div class="muted" style="font-size:13px">Nothing to deploy — live matches ' + esc(ref) + '.</div>';
-  $('drift-body').innerHTML = legend + pcBlocks +
+    : '<div class="muted" style="font-size:13px">Nothing to deploy — config and live both match ' + esc(ref) + '.</div>';
+  $('drift-body').innerHTML = cfgBlock + liveHdr + pcBlocks +
     '<div style="position:sticky;bottom:0;background:#fff;padding-top:12px;margin-top:12px;border-top:1px solid #eee">' + deployBtn + '</div>';
 }
 function reviewFileDiff(ip, idx) { driftCtx = { ip, entries: reviewDrift[ip] || [] }; showFileDiff(idx); }
