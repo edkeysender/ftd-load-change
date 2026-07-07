@@ -64,6 +64,7 @@
   <div style="display:flex;gap:8px;margin-bottom:16px">
     <button id="mtab-loads" onclick="showMainTab('loads')">Loads</button>
     <button class="ghost" id="mtab-config" onclick="showMainTab('config')">Configuration</button>
+    <button class="ghost" id="mtab-seq" onclick="showMainTab('seq')">Sequence Config</button>
   </div>
 
   <div id="maintab-loads">
@@ -213,6 +214,31 @@
   </section>
 
   </div><!-- /maintab-config -->
+
+  <div id="maintab-seq" style="display:none">
+    <section>
+      <h2>Sequence Config <span class="muted" style="font-size:11px;font-weight:400">(startup / shutdown builder)</span>
+        <span style="margin-left:auto"></span>
+        <label class="ghost" style="padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px">Import…
+          <input type="file" accept=".json,application/json" style="display:none" onchange="seqImportFile(this)"></label>
+        <button class="ghost" onclick="seqLoadSample()">Load sample</button>
+        <button class="ghost" onclick="seqCopy()">Copy JSON</button>
+        <button onclick="seqExport()">Download JSON</button>
+      </h2>
+      <div class="hint">Build the simulator sequence config visually — top-level widgets, trigger cases, and ordered steps. Edits sync to the raw JSON below; this stays in your browser (Download to save).</div>
+      <div id="seq-status" class="hint" style="margin:4px 0 0"></div>
+      <div id="seq-builder" style="margin-top:12px"></div>
+      <details style="margin-top:14px" id="seq-raw-wrap">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">Raw JSON</summary>
+        <textarea id="seq-json" spellcheck="false"
+          style="width:100%;height:300px;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;resize:vertical;box-sizing:border-box;margin-top:8px"></textarea>
+        <div class="row-actions" style="margin-top:8px;align-items:center">
+          <button onclick="seqApplyJson()">Apply JSON → builder</button>
+          <span id="seq-json-status" class="hint" style="margin:0"></span>
+        </div>
+      </details>
+    </section>
+  </div><!-- /maintab-seq -->
 
 </div>
 <div id="toast"></div>
@@ -910,8 +936,10 @@ let nextDevTag = '';   // next dev-v1.x label, computed from /dev/versions
 function showMainTab(t) {
   $('maintab-loads').style.display = t === 'loads' ? '' : 'none';
   $('maintab-config').style.display = t === 'config' ? 'flex' : 'none';
+  $('maintab-seq').style.display = t === 'seq' ? '' : 'none';
   $('mtab-loads').className = t === 'loads' ? '' : 'ghost';
   $('mtab-config').className = t === 'config' ? '' : 'ghost';
+  $('mtab-seq').className = t === 'seq' ? '' : 'ghost';
   localStorage.setItem('simMainTab', t);  // remember across refresh
 }
 const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
@@ -1347,6 +1375,213 @@ async function saveBrowserManifest() {
   } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
 }
 
+// ===================== Sequence Config builder (in-browser only) =====================
+let SEQ = [];
+// Data-driven step types — add a new type here and it appears in the picker + forms.
+const SEQ_STEP_TYPES = {
+  singleFunction:    { label: 'Single function', output: true },
+  sleep:             { label: 'Sleep', output: false, valueHint: 'seconds' },
+  shutdownMachine:   { label: 'Shutdown machine', output: false, valueHint: '{"ip":"70.84.68.10"}' },
+  shutdownProjector: { label: 'Shutdown projector', output: false, valueHint: '{"ip":"70.84.68.21"}' },
+  wakeUpProjector:   { label: 'Wake projector', output: false, valueHint: '{"ip":"70.84.68.21"}' },
+  wakeOnLan:         { label: 'Wake-on-LAN', output: false, valueHint: '{"name":"..","mac":"..","broadcast":"..","port":9}' },
+  waitForSignal:     { label: 'Wait for signal', output: false, forceInput: 'ARINC' },
+};
+const SEQ_TOP_LABEL = { onTrigger: 'On trigger', twoWayValue: 'Two-way value' };
+
+function sqEl(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  if (props) for (const k in props) {
+    if (k === 'style') e.style.cssText = props[k];
+    else if (k === 'class') e.className = props[k];
+    else if (k.startsWith('on')) e[k] = props[k];
+    else e.setAttribute(k, props[k]);
+  }
+  for (const c of kids) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(c)); }
+  return e;
+}
+const sqBtn = (label, onclick, cls) => sqEl('button', { class: cls || '', style: 'padding:3px 9px;font-size:12px', onclick }, label);
+function sqSel(opts, value, onchange) {
+  const s = sqEl('select', { style: 'padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', onchange: () => onchange(s.value) });
+  opts.forEach(o => { const [v, l] = Array.isArray(o) ? o : [o, o]; const op = sqEl('option', { value: v }, l); if (v === value) op.selected = true; s.appendChild(op); });
+  return s;
+}
+const sqLabel = (label, node) => sqEl('label', { style: 'display:inline-flex;flex-direction:column;font-size:10px;color:#908e86;gap:2px' }, label, node);
+const sqSub = t => sqEl('div', { style: 'font-weight:600;font-size:12px;margin:10px 0 3px;color:#2c2c2a' }, t);
+function sqText(get, set, ph) { const i = sqEl('input', { style: 'padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', placeholder: ph || '' }); i.value = get() == null ? '' : get(); i.onchange = () => { set(i.value); seqSyncJson(); }; return i; }
+function sqNum(get, set) { const i = sqEl('input', { type: 'number', style: 'width:80px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px' }); i.value = get() == null ? '' : get(); i.onchange = () => { set(i.value === '' ? undefined : Number(i.value)); seqSyncJson(); }; return i; }
+function sqCheck(label, val, set) { const c = sqEl('input', { type: 'checkbox' }); c.checked = !!val; c.onchange = () => set(c.checked); return sqEl('label', { style: 'display:inline-flex;align-items:center;gap:4px;font-size:12px' }, c, label); }
+function sqJsonVal(get, set, ph) {
+  const i = sqEl('input', { style: 'min-width:130px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-family:ui-monospace,monospace;font-size:12px', placeholder: ph || 'value' });
+  const v = get(); i.value = v === undefined ? '' : JSON.stringify(v);
+  i.onchange = () => { const raw = i.value.trim(); let val; if (raw === '') val = undefined; else { try { val = JSON.parse(raw); } catch (e) { val = raw; } } set(val); i.value = val === undefined ? '' : JSON.stringify(val); seqSyncJson(); };
+  return i;
+}
+function sqMove(arr, idx, dir) { const j = idx + dir; if (j < 0 || j >= arr.length) return; const t = arr[idx]; arr[idx] = arr[j]; arr[j] = t; seqRefresh(); }
+
+function seqSyncJson() { const t = $('seq-json'); if (t) t.value = JSON.stringify(SEQ, null, 2); }
+function seqRefresh() { seqRender(); seqSyncJson(); }
+const seqSetStatus = (m, c) => { const e = $('seq-status'); if (e) { e.textContent = m; e.className = 'hint ' + (c || ''); } };
+
+function ioDefault(kind) {
+  if (kind === 'none') return {};
+  if (kind === 'fixedValue') return { type: 'fixedValue', value: 0 };
+  if (kind === 'ARINC') return { type: 'ARINC', domain: '', key: '' };
+  return { type: kind, key: '' }; // UI / SUPPORT
+}
+function normalizeStep(step) {
+  const t = SEQ_STEP_TYPES[step.widgetType];
+  if (!t) return;
+  if (t.forceInput === 'ARINC' && (!step.input || step.input.type !== 'ARINC')) step.input = { type: 'ARINC', domain: '', key: '' };
+  if (!step.input) step.input = { type: 'fixedValue', value: 0 };
+  if (t.output === false) step.output = {};
+  else if (!step.output) step.output = {};
+}
+function renderIO(step, field, isInput) {
+  const wrap = sqEl('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0 4px' });
+  const obj = step[field] || (step[field] = isInput ? { type: 'fixedValue', value: 0 } : {});
+  const kinds = isInput ? ['fixedValue', 'ARINC', 'UI', 'SUPPORT'] : ['none', 'UI', 'SUPPORT', 'ARINC'];
+  const kind = isInput ? (obj.type || 'fixedValue') : (obj && obj.type ? obj.type : 'none');
+  wrap.appendChild(sqSel(kinds, kind, v => { step[field] = ioDefault(v); seqRefresh(); }));
+  if (kind === 'fixedValue') wrap.appendChild(sqLabel('value', sqJsonVal(() => obj.value, x => obj.value = x, SEQ_STEP_TYPES[step.widgetType] && SEQ_STEP_TYPES[step.widgetType].valueHint)));
+  else if (kind === 'UI' || kind === 'SUPPORT') wrap.appendChild(sqLabel('key', sqText(() => obj.key, x => obj.key = x)));
+  else if (kind === 'ARINC') {
+    wrap.appendChild(sqLabel('domain', sqText(() => obj.domain, x => obj.domain = x)));
+    wrap.appendChild(sqLabel('key', sqText(() => obj.key, x => obj.key = x)));
+    wrap.appendChild(sqLabel('value (opt)', sqJsonVal(() => obj.value, x => { if (x === undefined) delete obj.value; else obj.value = x; })));
+  }
+  return wrap;
+}
+function renderStep(step, arr, idx) {
+  const card = sqEl('div', { style: 'border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin:6px 0;background:#fff' });
+  const head = sqEl('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap' });
+  head.appendChild(sqSel(Object.keys(SEQ_STEP_TYPES).map(k => [k, SEQ_STEP_TYPES[k].label]), step.widgetType || 'singleFunction', v => { step.widgetType = v; normalizeStep(step); seqRefresh(); }));
+  const info = sqEl('input', { style: 'flex:1;min-width:140px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', placeholder: 'info / description' });
+  info.value = step.info || ''; info.onchange = () => { step.info = info.value; seqSyncJson(); };
+  head.appendChild(info);
+  head.appendChild(sqBtn('↑', () => sqMove(arr, idx, -1), 'ghost'));
+  head.appendChild(sqBtn('↓', () => sqMove(arr, idx, 1), 'ghost'));
+  head.appendChild(sqBtn('✕', () => { arr.splice(idx, 1); seqRefresh(); }, 'ghost'));
+  card.appendChild(head);
+  const meta = sqEl('div', { style: 'display:flex;align-items:center;gap:12px;margin-top:6px' });
+  meta.appendChild(sqLabel('err code', sqNum(() => step.codeOnError, v => step.codeOnError = v)));
+  meta.appendChild(sqCheck('abort on error', step.abortOnError, v => { step.abortOnError = v; seqSyncJson(); }));
+  card.appendChild(meta);
+  card.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:4px' }, 'input'));
+  card.appendChild(renderIO(step, 'input', true));
+  if (!SEQ_STEP_TYPES[step.widgetType] || SEQ_STEP_TYPES[step.widgetType].output !== false) {
+    card.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'output'));
+    card.appendChild(renderIO(step, 'output', false));
+  }
+  return card;
+}
+function renderStepList(arr) {
+  const box = sqEl('div', {});
+  arr.forEach((s, i) => box.appendChild(renderStep(s, arr, i)));
+  box.appendChild(sqBtn('+ Add step', () => { arr.push({ widgetType: 'singleFunction', abortOnError: false, info: '', codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: {} }); seqRefresh(); }, 'ghost'));
+  return box;
+}
+function renderOnTrigger(w) {
+  const box = sqEl('div', {});
+  w.input = w.input || []; w.onStepError = w.onStepError || []; w.output = w.output || [];
+  box.appendChild(sqSub('Inputs (triggers)'));
+  w.input.forEach((inp, i) => {
+    const row = sqEl('div', { style: 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:3px 0' });
+    row.appendChild(sqSel(['UI', 'SUPPORT', 'ARINC'], inp.type || 'UI', v => { inp.type = v; seqSyncJson(); }));
+    row.appendChild(sqLabel('key', sqText(() => inp.key, x => inp.key = x)));
+    if (inp.type === 'ARINC') row.appendChild(sqLabel('domain', sqText(() => inp.domain, x => inp.domain = x)));
+    row.appendChild(sqLabel('trigger', sqJsonVal(() => inp.trigger, x => inp.trigger = x)));
+    row.appendChild(sqBtn('✕', () => { w.input.splice(i, 1); seqRefresh(); }, 'ghost'));
+    box.appendChild(row);
+  });
+  box.appendChild(sqBtn('+ input', () => { w.input.push({ type: 'UI', key: '', trigger: { cycle_group: '' } }); seqRefresh(); }, 'ghost'));
+  box.appendChild(sqSub('On step error'));
+  box.appendChild(renderStepList(w.onStepError));
+  box.appendChild(sqSub('Output cases (trigger value → sequence)'));
+  w.output.forEach((c, ci) => {
+    const cw = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:8px;padding:8px;margin:6px 0;background:#faf9f5' });
+    const ch = sqEl('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:4px' });
+    ch.appendChild(sqEl('b', {}, 'when value ='));
+    ch.appendChild(sqNum(() => c.value, v => c.value = v));
+    ch.appendChild(sqBtn('✕ case', () => { w.output.splice(ci, 1); seqRefresh(); }, 'ghost'));
+    cw.appendChild(ch);
+    c.sequence = c.sequence || [];
+    cw.appendChild(renderStepList(c.sequence));
+    box.appendChild(cw);
+  });
+  box.appendChild(sqBtn('+ case', () => { w.output.push({ value: w.output.length, sequence: [] }); seqRefresh(); }, 'ghost'));
+  return box;
+}
+function renderGenericWidget(w, idx) {
+  const box = sqEl('div', {});
+  box.appendChild(sqEl('div', { class: 'hint', style: 'margin:0 0 4px' }, 'Edited as JSON (a visual form for this type can be added later).'));
+  const ta = sqEl('textarea', { spellcheck: 'false', style: 'width:100%;height:190px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:8px;box-sizing:border-box' });
+  ta.value = JSON.stringify(w, null, 2);
+  ta.onchange = () => { try { SEQ[idx] = JSON.parse(ta.value); seqSyncJson(); ta.style.borderColor = '#d3d1c7'; } catch (e) { ta.style.borderColor = '#c0392b'; } };
+  box.appendChild(ta);
+  return box;
+}
+function renderWidget(w, i) {
+  const card = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:10px;padding:10px 12px;margin-bottom:10px;background:#fff' });
+  const head = sqEl('div', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:6px;border-bottom:1px solid #ece9e0;padding-bottom:6px' });
+  head.appendChild(sqEl('span', { class: 'pill training', style: 'font-size:11px' }, SEQ_TOP_LABEL[w.widgetType] || w.widgetType || 'widget'));
+  head.appendChild(sqEl('span', { style: 'margin-left:auto' }));
+  head.appendChild(sqBtn('↑', () => sqMove(SEQ, i, -1), 'ghost'));
+  head.appendChild(sqBtn('↓', () => sqMove(SEQ, i, 1), 'ghost'));
+  head.appendChild(sqBtn('✕ widget', () => { SEQ.splice(i, 1); seqRefresh(); }, 'ghost'));
+  card.appendChild(head);
+  card.appendChild(w.widgetType === 'onTrigger' ? renderOnTrigger(w) : renderGenericWidget(w, i));
+  return card;
+}
+function seqRender() {
+  const root = $('seq-builder'); if (!root) return;
+  if (!Array.isArray(SEQ)) SEQ = [];
+  root.innerHTML = '';
+  if (!SEQ.length) root.appendChild(sqEl('div', { class: 'muted', style: 'font-size:13px' }, 'Empty — Import a sequenceConfig.json, Load sample, or add a widget below.'));
+  SEQ.forEach((w, i) => root.appendChild(renderWidget(w, i)));
+  root.appendChild(sqEl('div', { class: 'row-actions', style: 'margin-top:10px' },
+    sqBtn('+ On-trigger sequence', () => { SEQ.push({ widgetType: 'onTrigger', input: [], onStepError: [], output: [] }); seqRefresh(); }, 'ghost'),
+    sqBtn('+ Two-way value', () => { SEQ.push({ widgetType: 'twoWayValue', inputs: [], outputs: [], policy: {} }); seqRefresh(); }, 'ghost')));
+}
+function seqApplyJson() {
+  try {
+    const v = JSON.parse($('seq-json').value);
+    if (!Array.isArray(v)) throw new Error('top level must be an array of widgets');
+    SEQ = v; seqRender();
+    const s = $('seq-json-status'); if (s) { s.textContent = 'applied ✓'; s.className = 'hint ok'; }
+  } catch (e) { const s = $('seq-json-status'); if (s) { s.textContent = 'parse error: ' + e.message; s.className = 'hint bad'; } }
+}
+function seqImportFile(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { try { SEQ = JSON.parse(r.result); seqRefresh(); seqSetStatus('imported ' + f.name + ' ✓', 'ok'); } catch (e) { seqSetStatus('import failed: ' + e.message, 'bad'); } };
+  r.readAsText(f); input.value = '';
+}
+function seqExport() {
+  const blob = new Blob([JSON.stringify(SEQ, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'sequenceConfig.json'; a.click(); URL.revokeObjectURL(a.href);
+}
+function seqCopy() { navigator.clipboard.writeText(JSON.stringify(SEQ, null, 2)).then(() => toast('JSON copied'), () => toast('copy failed', true)); }
+function seqLoadSample() {
+  SEQ = [{
+    widgetType: 'onTrigger',
+    onStepError: [{ widgetType: 'singleFunction', input: { type: 'fixedValue', value: 5 }, output: { type: 'UI', key: 'SeqState' } }],
+    input: [{ type: 'UI', key: 'OnOffSw', trigger: { cycle_group: 'OnOffSw' } }],
+    output: [
+      { value: 0, sequence: [
+        { widgetType: 'singleFunction', abortOnError: false, info: 'Update sequence state', codeOnError: 101, input: { type: 'fixedValue', value: 2 }, output: { type: 'UI', key: 'SeqState' } },
+        { widgetType: 'shutdownMachine', abortOnError: false, info: 'Shutting down IOS', codeOnError: 102, input: { type: 'fixedValue', value: { ip: '70.84.68.10' } }, output: {} },
+        { widgetType: 'sleep', abortOnError: false, info: 'Wait for shutdown', codeOnError: 105, input: { type: 'fixedValue', value: 10 }, output: {} },
+      ] },
+      { value: 1, sequence: [
+        { widgetType: 'singleFunction', abortOnError: false, info: 'Power on relay 1', codeOnError: 201, input: { type: 'fixedValue', value: true }, output: { type: 'ARINC', domain: 'POWERSWITCH', key: 'IOS.Relay1' } },
+        { widgetType: 'waitForSignal', abortOnError: false, info: 'Wait for SIM ready', codeOnError: 219, input: { type: 'ARINC', domain: 'SIM', key: 'SimStatus.simReady', value: { threshold: 1, mode: 'eq', eps: 0.000001 } }, output: {} },
+      ] },
+    ],
+  }];
+  seqRefresh(); seqSetStatus('loaded sample', 'ok');
+}
+
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
@@ -1355,6 +1590,7 @@ showConfigTab('browser');  // default config sub-tab (view only)
 loadConfig();              // load browser data once
 loadManifest();            // load YAML once (tab switches no longer reload)
 loadGlobalIgnore();        // load the global ignore editor once
+seqRender();               // sequence-config builder (empty until Import/sample)
 setInterval(refresh, 5000);
 </script>
 </body>
