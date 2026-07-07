@@ -1452,6 +1452,41 @@ function renderIO(step, field, isInput) {
   }
   return wrap;
 }
+// Type-tailored editor for an "action" step (no output): sleep = seconds, shutdown/
+// wake = IP, wake-on-lan = name/mac/…, waitForSignal = ARINC domain/key/mode/threshold.
+function renderStepInput(step) {
+  const t = step.widgetType;
+  if (t === 'sleep') {
+    if (!step.input || typeof step.input.value === 'object') step.input = { type: 'fixedValue', value: Number(step.input && step.input.value) || 0 };
+    step.input.type = 'fixedValue';
+    return sqLabel('seconds', sqNum(() => step.input.value, x => step.input.value = x));
+  }
+  if (t === 'shutdownMachine' || t === 'shutdownProjector' || t === 'wakeUpProjector') {
+    if (!step.input || typeof step.input.value !== 'object') step.input = { type: 'fixedValue', value: { ip: '' } };
+    return sqLabel('IP address', sqText(() => step.input.value.ip || '', x => step.input.value.ip = x));
+  }
+  if (t === 'wakeOnLan') {
+    if (!step.input || typeof step.input.value !== 'object') step.input = { type: 'fixedValue', value: { name: '', mac: '', broadcast: '70.84.68.255', port: 9 } };
+    const v = step.input.value;
+    return sqEl('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
+      sqLabel('name', sqText(() => v.name || v.Name || '', x => v.name = x)),
+      sqLabel('mac', sqText(() => v.mac || '', x => v.mac = x)),
+      sqLabel('broadcast', sqText(() => v.broadcast || '', x => v.broadcast = x)),
+      sqLabel('port', sqNum(() => v.port, x => v.port = x)));
+  }
+  if (t === 'waitForSignal') {
+    if (!step.input || step.input.type !== 'ARINC') step.input = { type: 'ARINC', domain: '', key: '', value: { threshold: 1, mode: 'eq', eps: 0.000001 } };
+    if (typeof step.input.value !== 'object') step.input.value = { threshold: 1, mode: 'eq', eps: 0.000001 };
+    const s = step.input, v = s.value;
+    return sqEl('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' },
+      sqLabel('domain', sqText(() => s.domain, x => s.domain = x)),
+      sqLabel('key', sqText(() => s.key, x => s.key = x)),
+      sqLabel('mode', sqSel(['eq', 'ne', 'gt', 'lt', 'ge', 'le'], v.mode || 'eq', x => { v.mode = x; seqSyncJson(); })),
+      sqLabel('threshold', sqNum(() => v.threshold, x => v.threshold = x)));
+  }
+  return renderIO(step, 'input', true); // fallback
+}
+
 const SEQ_OPEN = new WeakSet();  // which step blocks are expanded for editing
 const STEP_ICON = { singleFunction: 'ƒ', sleep: '⏱', shutdownMachine: '⏻', shutdownProjector: '📽', wakeUpProjector: '📽', wakeOnLan: '📡', waitForSignal: '⏳' };
 function stepSummary(step) {
@@ -1497,9 +1532,13 @@ function renderStep(step, arr, idx) {
     row.appendChild(sqLabel('err code', sqNum(() => step.codeOnError, x => step.codeOnError = x)));
     row.appendChild(sqCheck('abort on error', step.abortOnError, x => { step.abortOnError = x; seqSyncJson(); }));
     ed.appendChild(row);
-    ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:6px' }, 'input'));
-    ed.appendChild(renderIO(step, 'input', true));
-    if (!SEQ_STEP_TYPES[step.widgetType] || SEQ_STEP_TYPES[step.widgetType].output !== false) {
+    const st = SEQ_STEP_TYPES[step.widgetType];
+    if (st && st.output === false) {
+      // Action step (sleep/shutdown/wake/wait): tailored fields, no output.
+      ed.appendChild(sqEl('div', { style: 'margin-top:8px' }, renderStepInput(step)));
+    } else {
+      ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:6px' }, 'input'));
+      ed.appendChild(renderIO(step, 'input', true));
       ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'output'));
       ed.appendChild(renderIO(step, 'output', false));
     }
