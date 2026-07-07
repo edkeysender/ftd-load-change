@@ -1489,33 +1489,99 @@ function renderStepInput(step) {
 }
 
 const SEQ_OPEN = new WeakSet();  // which step blocks are expanded for editing
-const STEP_ICON = { singleFunction: 'ƒ', sleep: '⏱', shutdownMachine: '⏻', shutdownProjector: '📽', wakeUpProjector: '📽', wakeOnLan: '📡', waitForSignal: '⏳' };
-function stepSummary(step) {
-  const t = step.widgetType, i = step.input || {}, o = step.output || {};
-  const v = x => x === undefined ? '' : (typeof x === 'object' ? JSON.stringify(x) : String(x));
-  const ip = (i.value && i.value.ip) || '';
-  if (t === 'sleep') return 'wait ' + v(i.value) + 's';
-  if (t === 'shutdownMachine') return 'shutdown ' + ip;
-  if (t === 'shutdownProjector') return 'projector OFF ' + ip;
-  if (t === 'wakeUpProjector') return 'projector ON ' + ip;
-  if (t === 'wakeOnLan') return 'Wake-on-LAN ' + ((i.value && (i.value.name || i.value.Name)) || '');
-  if (t === 'waitForSignal') return 'wait ' + (i.domain ? i.domain + '.' : '') + (i.key || '') + ' ' + ((i.value && i.value.mode) || '') + ' ' + (i.value && i.value.threshold !== undefined ? i.value.threshold : '');
-  if (t === 'singleFunction') {
-    const out = o.type === 'ARINC' ? (o.domain + '.' + o.key) : ((o.type === 'UI' || o.type === 'SUPPORT') ? o.key : '');
-    const inp = i.type === 'fixedValue' ? v(i.value) : (i.type === 'ARINC' ? (i.domain + '.' + i.key) : (i.key || ''));
-    return (out ? out + ' ← ' : '') + inp;
-  }
-  return '';
+const jv = x => x === undefined ? '' : (typeof x === 'object' ? JSON.stringify(x) : String(x));
+const ipOf = s => (s.input && s.input.value && s.input.value.ip) || '';
+function setIp(s, x) { if (!s.input || typeof s.input.value !== 'object' || !s.input.value) s.input = { type: 'fixedValue', value: {} }; s.input.value.ip = x; }
+const ON_OFF = [['true', 'ON'], ['false', 'OFF']];
+const RELAY_KEYS = Array.from({ length: 10 }, (_, i) => 'IOS.Relay' + (i + 1));
+const LIGHT_KEYS = ['IOS.ReadyLight', 'IOS.ProgressOnLight', 'IOS.FlightInProgressLight'];
+function stepSummary(step) {  // fallback summary for the Custom block
+  const i = step.input || {}, o = step.output || {};
+  const out = o.type === 'ARINC' ? (o.domain + '.' + o.key) : ((o.type === 'UI' || o.type === 'SUPPORT') ? o.key : '');
+  const inp = i.type === 'fixedValue' ? jv(i.value) : (i.type === 'ARINC' ? (i.domain + '.' + i.key) : (i.key || ''));
+  return (out ? out + ' ← ' : '') + inp;
 }
-// A step rendered as a schematic block: compact summary; click to expand + edit.
+// Palette of blocks. Output + domain are baked into make() and NOT shown — you only
+// edit the meaningful field(s). `match` recognises existing steps on import; first
+// match wins, so 'custom' (matches anything) is last.
+const SEQ_BLOCKS = [
+  { id: 'seqstate', label: 'Update sequence state', icon: '▦',
+    match: s => s.widgetType === 'singleFunction' && s.output && s.output.type === 'UI' && s.output.key === 'SeqState',
+    make: () => ({ widgetType: 'singleFunction', info: 'Update sequence state', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: { type: 'UI', key: 'SeqState' } }),
+    summary: s => 'SeqState ← ' + jv(s.input && s.input.value),
+    fields: s => [sqLabel('state', sqNum(() => s.input.value, x => s.input.value = x))] },
+  { id: 'seqstate_sup', label: 'Update sequence state (support)', icon: '▦',
+    match: s => s.widgetType === 'singleFunction' && s.output && s.output.type === 'SUPPORT' && s.output.key === 'Support.SeqState',
+    make: () => ({ widgetType: 'singleFunction', info: 'Update sequence state', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: { type: 'SUPPORT', key: 'Support.SeqState' } }),
+    summary: s => 'Support.SeqState ← ' + jv(s.input && s.input.value),
+    fields: s => [sqLabel('state', sqNum(() => s.input.value, x => s.input.value = x))] },
+  { id: 'relay', label: 'Set relay', icon: '⚡',
+    match: s => s.widgetType === 'singleFunction' && s.output && s.output.type === 'ARINC' && /^IOS\.Relay\d+$/.test(s.output.key || ''),
+    make: () => ({ widgetType: 'singleFunction', info: 'Set relay', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: true }, output: { type: 'ARINC', domain: 'GOVERNOR', key: 'IOS.Relay1' } }),
+    summary: s => (s.output && s.output.key) + ' ← ' + (s.input && s.input.value ? 'ON' : 'OFF'),
+    fields: s => [sqLabel('relay', sqSel(RELAY_KEYS, s.output.key, x => { s.output.key = x; seqSyncJson(); })),
+      sqLabel('state', sqSel(ON_OFF, String(!!(s.input && s.input.value)), x => { s.input.value = (x === 'true'); seqSyncJson(); }))] },
+  { id: 'light', label: 'Set light', icon: '💡',
+    match: s => s.widgetType === 'singleFunction' && s.output && s.output.type === 'ARINC' && /Light$/.test(s.output.key || ''),
+    make: () => ({ widgetType: 'singleFunction', info: 'Set light', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: true }, output: { type: 'ARINC', domain: 'GOVERNOR', key: 'IOS.ReadyLight' } }),
+    summary: s => (s.output && s.output.key) + ' ← ' + (s.input && s.input.value ? 'ON' : 'OFF'),
+    fields: s => [sqLabel('light', sqSel(LIGHT_KEYS, s.output.key, x => { s.output.key = x; seqSyncJson(); })),
+      sqLabel('state', sqSel(ON_OFF, String(!!(s.input && s.input.value)), x => { s.input.value = (x === 'true'); seqSyncJson(); }))] },
+  { id: 'sleep', label: 'Wait (sleep)', icon: '⏱',
+    match: s => s.widgetType === 'sleep',
+    make: () => ({ widgetType: 'sleep', info: 'Wait', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: 5 }, output: {} }),
+    summary: s => 'wait ' + jv(s.input && s.input.value) + 's',
+    fields: s => [sqLabel('seconds', sqNum(() => s.input.value, x => s.input.value = x))] },
+  { id: 'shutdownMachine', label: 'Shutdown PC', icon: '⏻',
+    match: s => s.widgetType === 'shutdownMachine',
+    make: () => ({ widgetType: 'shutdownMachine', info: 'Shutdown PC', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: { ip: '' } }, output: {} }),
+    summary: s => 'shutdown ' + ipOf(s),
+    fields: s => [sqLabel('IP', sqText(() => ipOf(s), x => setIp(s, x)))] },
+  { id: 'shutdownProjector', label: 'Shutdown projector', icon: '📽',
+    match: s => s.widgetType === 'shutdownProjector',
+    make: () => ({ widgetType: 'shutdownProjector', info: 'Shutdown projector', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: { ip: '' } }, output: {} }),
+    summary: s => 'projector OFF ' + ipOf(s),
+    fields: s => [sqLabel('IP', sqText(() => ipOf(s), x => setIp(s, x)))] },
+  { id: 'wakeUpProjector', label: 'Wake projector', icon: '📽',
+    match: s => s.widgetType === 'wakeUpProjector',
+    make: () => ({ widgetType: 'wakeUpProjector', info: 'Wake projector', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: { ip: '' } }, output: {} }),
+    summary: s => 'projector ON ' + ipOf(s),
+    fields: s => [sqLabel('IP', sqText(() => ipOf(s), x => setIp(s, x)))] },
+  { id: 'wakeOnLan', label: 'Wake-on-LAN PC', icon: '📡',
+    match: s => s.widgetType === 'wakeOnLan',
+    make: () => ({ widgetType: 'wakeOnLan', info: 'Wake-on-LAN', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: { name: '', mac: '', broadcast: '70.84.68.255', port: 9 } }, output: {} }),
+    summary: s => 'Wake-on-LAN ' + ((s.input && s.input.value && (s.input.value.name || s.input.value.Name)) || ''),
+    fields: s => { if (!s.input || typeof s.input.value !== 'object') s.input = { type: 'fixedValue', value: {} }; const v = s.input.value; return [
+      sqLabel('name', sqText(() => v.name || v.Name || '', x => v.name = x)),
+      sqLabel('mac', sqText(() => v.mac || '', x => v.mac = x)),
+      sqLabel('broadcast', sqText(() => v.broadcast || '', x => v.broadcast = x)),
+      sqLabel('port', sqNum(() => v.port, x => v.port = x))]; } },
+  { id: 'waitForSignal', label: 'Wait for signal', icon: '⏳',
+    match: s => s.widgetType === 'waitForSignal',
+    make: () => ({ widgetType: 'waitForSignal', info: 'Wait for signal', abortOnError: false, codeOnError: 0, input: { type: 'ARINC', domain: '', key: '', value: { threshold: 1, mode: 'eq', eps: 0.000001 } }, output: {} }),
+    summary: s => 'wait ' + ((s.input && s.input.domain) ? s.input.domain + '.' : '') + ((s.input && s.input.key) || '') + ' ' + ((s.input && s.input.value && s.input.value.mode) || '') + ' ' + (s.input && s.input.value && s.input.value.threshold !== undefined ? s.input.value.threshold : ''),
+    fields: s => { if (!s.input || typeof s.input.value !== 'object') s.input = { type: 'ARINC', domain: s.input && s.input.domain || '', key: s.input && s.input.key || '', value: { threshold: 1, mode: 'eq', eps: 0.000001 } }; const v = s.input.value; return [
+      sqLabel('domain', sqText(() => s.input.domain, x => s.input.domain = x)),
+      sqLabel('key', sqText(() => s.input.key, x => s.input.key = x)),
+      sqLabel('mode', sqSel(['eq', 'ne', 'gt', 'lt', 'ge', 'le'], v.mode || 'eq', x => { v.mode = x; seqSyncJson(); })),
+      sqLabel('threshold', sqNum(() => v.threshold, x => v.threshold = x))]; } },
+  { id: 'custom', label: 'Custom (advanced)', icon: '▪',
+    match: s => true,
+    make: () => ({ widgetType: 'singleFunction', info: '', abortOnError: false, codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: {} }),
+    summary: s => stepSummary(s),
+    fields: s => [sqEl('div', {}, sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'input'), renderIO(s, 'input', true), sqEl('div', { class: 'hint', style: 'margin-top:4px' }, 'Advanced — set the output/domain in Raw JSON.'))] },
+];
+const blockOf = step => SEQ_BLOCKS.find(b => b.match(step)) || SEQ_BLOCKS[SEQ_BLOCKS.length - 1];
+
+// A step rendered as a schematic block: icon + label + summary; click to expand + edit.
 function renderStep(step, arr, idx) {
-  const open = SEQ_OPEN.has(step);
+  const open = SEQ_OPEN.has(step), b = blockOf(step);
   const block = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:10px;background:#fff' });
   const head = sqEl('div', { style: 'display:flex;align-items:center;gap:9px;padding:7px 10px;cursor:pointer', onclick: () => { open ? SEQ_OPEN.delete(step) : SEQ_OPEN.add(step); seqRefresh(); } });
-  head.appendChild(sqEl('span', { style: 'font-size:16px;width:20px;text-align:center' }, STEP_ICON[step.widgetType] || '▪'));
+  head.appendChild(sqEl('span', { style: 'font-size:16px;width:20px;text-align:center' }, b.icon || '▪'));
   head.appendChild(sqEl('div', { style: 'flex:1;min-width:0' },
-    sqEl('div', { style: 'font-weight:600;font-size:13px' }, step.info || (SEQ_STEP_TYPES[step.widgetType] && SEQ_STEP_TYPES[step.widgetType].label) || step.widgetType),
-    sqEl('div', { style: 'font-size:11px;color:#908e86;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, stepSummary(step))));
+    sqEl('div', { style: 'font-weight:600;font-size:13px' }, step.info || b.label),
+    sqEl('div', { style: 'font-size:11px;color:#908e86;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, b.summary(step))));
   const ctrl = sqEl('span', { style: 'display:flex;gap:2px', onclick: e => e.stopPropagation() });
   ctrl.appendChild(sqBtn('↑', () => sqMove(arr, idx, -1), 'ghost'));
   ctrl.appendChild(sqBtn('↓', () => sqMove(arr, idx, 1), 'ghost'));
@@ -1526,7 +1592,7 @@ function renderStep(step, arr, idx) {
   if (open) {
     const ed = sqEl('div', { style: 'padding:8px 10px;border-top:1px dashed #ece9e0', onclick: e => e.stopPropagation() });
     const row = sqEl('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap' });
-    row.appendChild(sqLabel('type', sqSel(Object.keys(SEQ_STEP_TYPES).map(k => [k, SEQ_STEP_TYPES[k].label]), step.widgetType || 'singleFunction', val => { step.widgetType = val; normalizeStep(step); seqRefresh(); })));
+    row.appendChild(sqLabel('block', sqSel(SEQ_BLOCKS.map(bl => [bl.id, bl.label]), b.id, id => { const nb = SEQ_BLOCKS.find(x => x.id === id); const made = nb.make(); made.info = step.info; made.codeOnError = step.codeOnError; made.abortOnError = step.abortOnError; arr[idx] = made; seqRefresh(); })));
     const info = sqEl('input', { style: 'flex:1;min-width:160px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', placeholder: 'info / description' });
     info.value = step.info || ''; info.onchange = () => { step.info = info.value; seqSyncJson(); };
     row.appendChild(sqLabel('info', info));
@@ -1535,16 +1601,9 @@ function renderStep(step, arr, idx) {
     ed.appendChild(row);
     const err = SEQ_ERRORS[step.codeOnError];
     if (err) ed.appendChild(sqEl('div', { class: 'hint', style: 'margin:4px 0 0' }, '⚠ ' + (err.description || '') + (err.solution ? ' — ' + err.solution : '')));
-    const st = SEQ_STEP_TYPES[step.widgetType];
-    if (st && st.output === false) {
-      // Action step (sleep/shutdown/wake/wait): tailored fields, no output.
-      ed.appendChild(sqEl('div', { style: 'margin-top:8px' }, renderStepInput(step)));
-    } else {
-      ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:6px' }, 'input'));
-      ed.appendChild(renderIO(step, 'input', true));
-      ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'output'));
-      ed.appendChild(renderIO(step, 'output', false));
-    }
+    const f = sqEl('div', { style: 'display:flex;gap:14px;flex-wrap:wrap;margin-top:8px' });
+    b.fields(step).forEach(n => f.appendChild(n));
+    ed.appendChild(f);
     block.appendChild(ed);
   }
   return block;
@@ -1553,9 +1612,10 @@ function renderStepList(arr) {
   const box = sqEl('div', {});
   arr.forEach((s, i) => {
     box.appendChild(renderStep(s, arr, i));
-    box.appendChild(sqEl('div', { style: 'text-align:center;color:#c9c6bd;font-size:13px;line-height:15px;height:15px' }, '↓'));  // connector
+    box.appendChild(sqEl('div', { style: 'text-align:center;color:#c9c6bd;font-size:13px;line-height:15px;height:15px' }, '↓'));
   });
-  box.appendChild(sqBtn('+ Add step', () => { arr.push({ widgetType: 'singleFunction', abortOnError: false, info: '', codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: {} }); seqRefresh(); }, 'ghost'));
+  const add = sqSel([['', '+ add block…'], ...SEQ_BLOCKS.map(b => [b.id, b.label])], '', id => { if (!id) return; arr.push(SEQ_BLOCKS.find(x => x.id === id).make()); seqRefresh(); });
+  box.appendChild(add);
   return box;
 }
 function renderOnTrigger(w) {
