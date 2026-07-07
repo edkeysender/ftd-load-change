@@ -1622,7 +1622,9 @@ function seqRender() {
   SEQ.forEach(w => {
     if (w.widgetType !== 'onTrigger' || !Array.isArray(w.output)) return;
     const trig = (w.input && w.input[0] && w.input[0].key) || '';
+    if (!/onoff/i.test(trig)) return;             // only the power switch (hide ProgressOnPTT etc.)
     w.output.forEach(c => {
+      if (c.value !== 0 && c.value !== 1) return;  // only OFF (0) and ON (1) — hide test/other cases
       any = true;
       const sec = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:10px;padding:10px 12px;margin-bottom:14px;background:#fff' });
       sec.appendChild(sqEl('div', { style: 'display:flex;align-items:baseline;gap:8px;margin-bottom:8px' },
