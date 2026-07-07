@@ -65,6 +65,30 @@ per-version rollback, deploy button, dev session panel (start/end, per-PC captur
 promote), bootstrap (import / size-report / seal v1.0), and LAN discovery. Enter
 your name (top-right) — it's used as the author/lock holder for dev/seal/promote.
 
+## Agent startup / reboot behaviour
+
+What the agent does when it starts depends on what is running and what is live:
+
+| Scenario | Resync? | Apps launched? |
+| --- | --- | --- |
+| **PC reboot, a training load (`v1.x`) is live** | ✅ yes (diff-only) | ✅ yes |
+| **PC reboot, a dev/test load (`dev-N`) is live** | ❌ no | ❌ no — waits for a manual **Deploy** |
+| **Agent restarted while the sim is running** | ❌ no (adopts state) | ❌ no |
+| **Agent self-update** | ❌ no (adopts state) | ❌ no |
+
+- On a **cold boot** the agent asks the coordinator (`GET /agents/{ip}/enforce`) for
+  the `training-live` load and syncs + launches it — but **only if `training-live` is
+  a customer training version**. If a **dev/test load** is live, `enforce` returns
+  nothing, so the PC stays idle until someone clicks **Deploy** again. Dev loads are
+  transient and must not auto-resume on a reboot; only production training loads
+  auto-recover.
+- Syncs are **diff-only** (`robocopy /MIR`), so re-launching an unchanged load copies
+  nothing — the time is the apps' `start_delay` sequence, not the file copy.
+- Restarting just the **agent** (sim still up) or a **self-update** never re-syncs or
+  restarts the apps — the agent adopts the deployed state and resumes monitoring.
+- To make a PC **never** auto-launch on boot (always wait for a manual Deploy), set
+  `"enforce_on_start": false` in that PC's `agent.json`.
+
 ## API summary
 
 Operator: `GET /pcs`, `GET /versions`, `GET /bootstrap`, `POST /import/{pc}`,
