@@ -222,6 +222,7 @@
         <label class="ghost" style="padding:6px 10px;border-radius:8px;cursor:pointer;font-size:13px">Import…
           <input type="file" accept=".json,application/json" style="display:none" onchange="seqImportFile(this)"></label>
         <button class="ghost" onclick="seqLoadSample()">Load sample</button>
+        <button class="ghost" onclick="seqErrorsOpen()">Error codes</button>
         <button class="ghost" onclick="seqCopy()">Copy JSON</button>
         <button onclick="seqExport()">Download JSON</button>
       </h2>
@@ -1532,6 +1533,8 @@ function renderStep(step, arr, idx) {
     row.appendChild(sqLabel('err code', sqNum(() => step.codeOnError, x => step.codeOnError = x)));
     row.appendChild(sqCheck('abort on error', step.abortOnError, x => { step.abortOnError = x; seqSyncJson(); }));
     ed.appendChild(row);
+    const err = SEQ_ERRORS[step.codeOnError];
+    if (err) ed.appendChild(sqEl('div', { class: 'hint', style: 'margin:4px 0 0' }, '⚠ ' + (err.description || '') + (err.solution ? ' — ' + err.solution : '')));
     const st = SEQ_STEP_TYPES[step.widgetType];
     if (st && st.output === false) {
       // Action step (sleep/shutdown/wake/wait): tailored fields, no output.
@@ -1674,6 +1677,74 @@ function seqLoadSample() {
     ],
   }];
   seqRefresh(); seqSetStatus('loaded sample', 'ok');
+}
+
+// Error-code catalogue — description / solution / expected per codeOnError. Proposed
+// from the startup/shutdown sequence; edit + Download. Covers every code in the config.
+let SEQ_ERRORS = {
+  "-1": { description: "Unknown error.", solution: "Check the logs for details.", expected: "N/A" },
+  // ---- Shutdown sequence (OnOffSw = 0) ----
+  "101": { description: "Failed to update the sequence state signal.", solution: "Retry; verify the UI/Support signal bus is connected.", expected: "SeqState updates to the shutting-down value." },
+  "102": { description: "IOS PC did not shut down.", solution: "Check the IOS PC is reachable and remote shutdown is permitted (credentials / RPC / WMI).", expected: "IOS PC (70.84.68.10) powers off." },
+  "103": { description: "Display PC did not shut down.", solution: "Check the Display PC network and remote-shutdown credentials.", expected: "Display PC (70.84.68.11) powers off." },
+  "104": { description: "Avionics PC did not shut down.", solution: "Check the Avionics PC network and remote-shutdown credentials.", expected: "Avionics PC (70.84.68.12) powers off." },
+  "105": { description: "Systems did not finish shutting down within the wait window.", solution: "Increase the wait time or confirm the PCs actually powered off.", expected: "All sim PCs are off after ~10s." },
+  "106": { description: "Projector 1 did not shut down.", solution: "Check projector 1 network and PJLink settings.", expected: "Projector 1 (70.84.68.21) enters standby." },
+  "107": { description: "Delay after projector 1 failed.", solution: "Sequencer/timer error — check the controller.", expected: "3s delay completes." },
+  "108": { description: "Projector 2 did not shut down.", solution: "Check projector 2 network and PJLink settings.", expected: "Projector 2 (70.84.68.22) enters standby." },
+  "109": { description: "Delay after projector 2 failed.", solution: "Sequencer/timer error — check the controller.", expected: "3s delay completes." },
+  "110": { description: "Projector 3 did not shut down.", solution: "Check projector 3 network and PJLink settings.", expected: "Projector 3 (70.84.68.23) enters standby." },
+  "111": { description: "Projectors did not finish cooling down.", solution: "Increase the wait — projectors need lamp cool-down before power is cut.", expected: "All projectors fully powered down after ~60s." },
+  "112": { description: "Relay 1 did not de-energize.", solution: "Check the GOVERNOR bus and relay 1 wiring.", expected: "IOS.Relay1 = false." },
+  "113": { description: "Relay 2 did not de-energize.", solution: "Check the GOVERNOR bus and relay 2 wiring.", expected: "IOS.Relay2 = false." },
+  "114": { description: "Relay 3 did not de-energize.", solution: "Check the GOVERNOR bus and relay 3 wiring.", expected: "IOS.Relay3 = false." },
+  "115": { description: "Power did not shut down within the wait window.", solution: "Increase the wait or verify the relays actually opened.", expected: "Bus power removed after ~60s." },
+  "116": { description: "Relay 4 did not de-energize.", solution: "Check the GOVERNOR bus and relay 4 wiring.", expected: "IOS.Relay4 = false." },
+  "117": { description: "Delay before restoring standby power failed.", solution: "Sequencer/timer error — check the controller.", expected: "5s delay completes." },
+  "118": { description: "Failed to restore standby power (relay 4).", solution: "Check the GOVERNOR bus and relay 4 wiring.", expected: "IOS.Relay4 = true (standby power restored)." },
+  "119": { description: "Failed to set the sequence state to idle.", solution: "Retry; verify the UI/Support signal bus.", expected: "SeqState = 0." },
+  // ---- Startup sequence (OnOffSw = 1) ----
+  "200": { description: "Failed to update the sequence state signal.", solution: "Retry; verify the UI/Support signal bus.", expected: "SeqState = 1." },
+  "201": { description: "Relay 1 did not energize.", solution: "Check the POWERSWITCH bus and relay 1 wiring.", expected: "IOS.Relay1 = true." },
+  "202": { description: "Delay after relay 1 failed.", solution: "Sequencer/timer error — check the controller.", expected: "1s delay completes." },
+  "203": { description: "Relay 2 did not energize.", solution: "Check the GOVERNOR bus and relay 2 wiring.", expected: "IOS.Relay2 = true." },
+  "204": { description: "Delay after relay 2 failed.", solution: "Sequencer/timer error — check the controller.", expected: "1s delay completes." },
+  "205": { description: "Relay 3 did not energize.", solution: "Check the GOVERNOR bus and relay 3 wiring.", expected: "IOS.Relay3 = true." },
+  "206": { description: "Delay after relay 3 failed.", solution: "Sequencer/timer error — check the controller.", expected: "1s delay completes." },
+  "207": { description: "Relay 4 did not energize.", solution: "Check the GOVERNOR bus and relay 4 wiring.", expected: "IOS.Relay4 = true." },
+  "208": { description: "Power did not stabilize in time.", solution: "Increase the wait; check the PSU/UPS and mains.", expected: "Bus power stable after ~60s." },
+  "209": { description: "Projector 1 did not wake up.", solution: "Check projector 1 network and PJLink; confirm it's in standby (not off at mains).", expected: "Projector 1 powers on within ~30s." },
+  "210": { description: "Delay after projector 1 failed.", solution: "Sequencer/timer error — check the controller.", expected: "3s delay completes." },
+  "211": { description: "Projector 2 did not wake up.", solution: "Check projector 2 network and PJLink; confirm it's in standby.", expected: "Projector 2 powers on within ~30s." },
+  "212": { description: "Delay after projector 2 failed.", solution: "Sequencer/timer error — check the controller.", expected: "3s delay completes." },
+  "213": { description: "Projector 3 did not wake up.", solution: "Check projector 3 network and PJLink; confirm it's in standby.", expected: "Projector 3 powers on within ~30s." },
+  "214": { description: "Projectors did not finish warming up.", solution: "Increase the warm-up wait — projectors need lamp warm-up.", expected: "All projectors warmed up after ~90s." },
+  "215": { description: "Wake-on-LAN to the Avionics PC failed or it didn't boot.", solution: "Verify the MAC, that WoL is enabled in BIOS/NIC, and the broadcast address/subnet.", expected: "Avionics PC boots." },
+  "216": { description: "Wake-on-LAN to the IOS PC failed or it didn't boot.", solution: "Verify the MAC, WoL enabled in BIOS/NIC, and the broadcast address/subnet.", expected: "IOS PC boots." },
+  "217": { description: "Wake-on-LAN to the Display PC failed or it didn't boot.", solution: "Verify the MAC, WoL enabled in BIOS/NIC, and the broadcast address/subnet.", expected: "Display PC boots." },
+  "218": { description: "Delay after Wake-on-LAN failed.", solution: "Sequencer/timer error — check the controller.", expected: "3s delay completes." },
+  "219": { description: "The simulator did not report ready in time.", solution: "Check the sim software started on all PCs; inspect SIM.SimStatus.simReady.", expected: "SimStatus.simReady = 1." },
+  "220": { description: "The ACL service did not reach the running state.", solution: "Check the ACL service on its host; inspect ACL.Service.state.", expected: "ACL Service.state = 4." },
+  "221": { description: "Failed to turn on the ready light.", solution: "Check the GOVERNOR bus and the IOS.ReadyLight output.", expected: "IOS.ReadyLight = true." },
+  "222": { description: "Failed to set the sequence state to ready.", solution: "Retry; verify the UI/Support signal bus.", expected: "SeqState = 4." }
+};
+function seqErrorsOpen() {
+  $('drift-title').textContent = 'Error codes';
+  $('drift-body').innerHTML =
+    '<div class="hint" style="margin-top:0">Description / solution / expected per error code (the steps\' <code>codeOnError</code> values). Editable — Download to save.</div>' +
+    '<textarea id="seq-err-json" spellcheck="false" onchange="seqErrorsApply()" style="width:100%;height:52vh;font-family:ui-monospace,Consolas,monospace;font-size:12px;border:1px solid #d3d1c7;border-radius:8px;padding:10px;box-sizing:border-box;margin-top:8px"></textarea>' +
+    '<div class="row-actions" style="margin-top:8px;align-items:center"><button onclick="seqErrorsDownload()">Download errorCodes.json</button><span id="seq-err-status" class="hint" style="margin:0"></span></div>';
+  $('seq-err-json').value = JSON.stringify(SEQ_ERRORS, null, 2);
+  $('drift-modal').style.display = 'flex';
+}
+function seqErrorsApply() {
+  const s = $('seq-err-status');
+  try { SEQ_ERRORS = JSON.parse($('seq-err-json').value); if (s) { s.textContent = 'ok ✓'; s.className = 'hint ok'; } seqRender(); }
+  catch (e) { if (s) { s.textContent = 'parse error: ' + e.message; s.className = 'hint bad'; } }
+}
+function seqErrorsDownload() {
+  const blob = new Blob([JSON.stringify(SEQ_ERRORS, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'errorCodes.json'; a.click(); URL.revokeObjectURL(a.href);
 }
 
 $('user').value = localStorage.getItem('simUser') || '';
