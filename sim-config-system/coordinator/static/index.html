@@ -979,25 +979,37 @@ function startNewDevLoad() {
   showConfigTab('browser');
   reloadTree();
 }
-// Step 1 — Review changes: diff the loaded dev load against what's live on the sim.
+// Step 1 — Review changes: what folders/excludes you've changed in this load vs the
+// dev version it was loaded from. (Config-level; live file content is captured on Import
+// and viewable per-PC via the 'diff' button in PC status.)
+function manifestDiff(a, b) {
+  const out = [], aPcs = (a && a.pcs) || {}, bPcs = (b && b.pcs) || {};
+  const byLive = apps => { const m = {}; Object.values(apps || {}).forEach(x => { const p = (x.live && x.live[0]) || ''; if (p) m[p] = x; }); return m; };
+  new Set([...Object.keys(aPcs), ...Object.keys(bPcs)]).forEach(ip => {
+    const A = byLive((aPcs[ip] || {}).apps), B = byLive((bPcs[ip] || {}).apps);
+    new Set([...Object.keys(A), ...Object.keys(B)]).forEach(p => {
+      if (!A[p]) out.push({ color: '#1d7a59', text: '+ ' + ip + '  add folder  ' + p });
+      else if (!B[p]) out.push({ color: '#c0392b', text: '− ' + ip + '  remove folder  ' + p });
+      else {
+        const ae = (A[p].exclude || []).join(', '), be = (B[p].exclude || []).join(', ');
+        if (ae !== be) out.push({ color: '#99641a', text: '~ ' + ip + '  ' + p + '  ignore: [' + be + ']' });
+      }
+    });
+  });
+  return out;
+}
 async function reviewChanges() {
-  const base = LIVE.tag || 'training-live';
-  const head = lastDevTag || 'dev';
-  $('drift-title').textContent = 'Review changes — live (' + base + ') → dev load (' + head + ')';
+  flushSelection();  // fold in the PC currently on screen
+  const ref = lastDevTag || 'dev';
+  $('drift-title').textContent = 'Review changes vs ' + ref;
   $('drift-body').innerHTML = '<div class="muted">Comparing…</div>';
   $('drift-modal').style.display = 'flex';
-  try {
-    const d = await api('GET', '/diff?base=' + encodeURIComponent(base) + '&head=' + encodeURIComponent(head));
-    const changed = d.changed || [];
-    if (!changed.length) { $('drift-body').innerHTML = '<div class="ok">No differences — this dev load matches what\'s live (' + esc(base) + ').</div>'; return; }
-    const rows = changed.map(c => {
-      const st = (Array.isArray(c) ? c[0] : '').trim(), path = Array.isArray(c) ? c[1] : c;
-      const label = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed' }[st[0]] || st || 'changed';
-      const col = st[0] === 'D' ? '#c0392b' : st[0] === 'A' ? '#1d7a59' : '#99641a';
-      return '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 0"><span style="color:' + col + ';min-width:70px;display:inline-block">' + esc(label) + '</span> ' + esc(path) + '</div>';
-    }).join('');
-    $('drift-body').innerHTML = '<div class="hint" style="margin-top:0">' + changed.length + ' changed path(s) vs live' + (d.compare_url ? ' — <a href="' + esc(d.compare_url) + '" target="_blank">open in Forgejo ↗</a>' : '') + '</div>' + rows;
-  } catch (e) { $('drift-body').innerHTML = '<div class="bad">' + esc(e.message) + '</div>'; }
+  let base = { pcs: {} };
+  try { base = (await api('GET', '/manifest/at?ref=' + encodeURIComponent(ref))).manifest || { pcs: {} }; } catch (e) {}
+  const diffs = manifestDiff(base, manifestObj || { pcs: {} });
+  const note = '<div class="hint" style="margin-top:0">Config (folders / ignores) vs <b>' + esc(ref) + '</b>. File-content changes are captured on Import — use a PC\'s <b>diff</b> in PC status to see live-vs-version file changes.</div>';
+  if (!diffs.length) { $('drift-body').innerHTML = note + '<div class="ok" style="margin-top:8px">No config changes vs ' + esc(ref) + '.</div>'; return; }
+  $('drift-body').innerHTML = note + diffs.map(d => '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 0;color:' + d.color + '">' + esc(d.text) + '</div>').join('');
 }
 
 // Step 2 — Deploy as Development Load: save → import every PC → commit → create the

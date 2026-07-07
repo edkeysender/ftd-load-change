@@ -78,11 +78,14 @@ no build step), organised into three top tabs:
   **Training Loads** (immutable `v1.x`, deploy any to the whole sim, *Re-deploy live*);
   and **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* / *Redeploy testing*,
   then *Promote to Training Load*); and **Compare** (diff any two versions).
-- **Configuration** — **Sync Configuration** (pick folders per PC from a live tree;
-  uncheck a subfolder to *ignore* it; raw-YAML tab) with the gated dev-version stepper
-  (Save → Import each PC → Deploy as Dev); **PC Images** (first-run import → seal `v1.0`,
-  hidden after); **Installs** (per-PC compliance guards — wallpaper, Git, SSH, VC++ — with
-  check/Apply and asset upload); and **Global ignore**.
+- **Load Configuration** — **Sync Configuration** (pick folders per PC from a live tree;
+  uncheck a subfolder to *ignore* it; raw-YAML tab). Opens defaulted to the **last dev
+  load**'s config. Two ways to build a dev version: the per-PC stepper (Save → Import each
+  PC → snapshot), or the streamlined **Review changes** (config diff vs the loaded dev
+  version) → **Deploy as Development Load** (one button: save → import every PC → commit →
+  create the dev version, with a two-phase progress modal, ending in a link to the new load
+  in **Loads**). Also **Installs** (per-PC compliance guards — wallpaper, Git, SSH, VC++ —
+  with check/Apply and asset upload) and **Global ignore**.
 - **Sequence Config** — in-browser block builder for the sim startup/shutdown
   `sequenceConfig.json` (import / edit / download; error-code catalogue).
 
