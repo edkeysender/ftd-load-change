@@ -1568,15 +1568,33 @@ function renderWidget(w, i) {
   card.appendChild(w.widgetType === 'onTrigger' ? renderOnTrigger(w) : renderGenericWidget(w, i));
   return card;
 }
+// Only the on-trigger OUTPUT cases (the sequences) matter for editing — show those,
+// keep everything else (inputs, on-step-error, other widgets) intact but hidden.
+function caseLabel(value, trig) {
+  const power = /onoff/i.test(trig || '');
+  const name = power ? (value === 0 ? 'Turn OFF simulator' : value === 1 ? 'Turn ON simulator' : 'Value ' + value) : 'Value ' + value;
+  return name;
+}
 function seqRender() {
   const root = $('seq-builder'); if (!root) return;
   if (!Array.isArray(SEQ)) SEQ = [];
   root.innerHTML = '';
-  if (!SEQ.length) root.appendChild(sqEl('div', { class: 'muted', style: 'font-size:13px' }, 'Empty — Import a sequenceConfig.json, Load sample, or add a widget below.'));
-  SEQ.forEach((w, i) => root.appendChild(renderWidget(w, i)));
-  root.appendChild(sqEl('div', { class: 'row-actions', style: 'margin-top:10px' },
-    sqBtn('+ On-trigger sequence', () => { SEQ.push({ widgetType: 'onTrigger', input: [], onStepError: [], output: [] }); seqRefresh(); }, 'ghost'),
-    sqBtn('+ Two-way value', () => { SEQ.push({ widgetType: 'twoWayValue', inputs: [], outputs: [], policy: {} }); seqRefresh(); }, 'ghost')));
+  let any = false;
+  SEQ.forEach(w => {
+    if (w.widgetType !== 'onTrigger' || !Array.isArray(w.output)) return;
+    const trig = (w.input && w.input[0] && w.input[0].key) || '';
+    w.output.forEach(c => {
+      any = true;
+      const sec = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:10px;padding:10px 12px;margin-bottom:14px;background:#fff' });
+      sec.appendChild(sqEl('div', { style: 'display:flex;align-items:baseline;gap:8px;margin-bottom:8px' },
+        sqEl('span', { style: 'font-weight:700;font-size:14px' }, caseLabel(c.value, trig)),
+        sqEl('span', { class: 'muted', style: 'font-size:11px' }, trig ? '(' + trig + ' = ' + c.value + ')' : 'value ' + c.value)));
+      c.sequence = c.sequence || [];
+      sec.appendChild(renderStepList(c.sequence));
+      root.appendChild(sec);
+    });
+  });
+  if (!any) root.appendChild(sqEl('div', { class: 'muted', style: 'font-size:13px' }, 'No sequences — Import a sequenceConfig.json or Load sample.'));
 }
 function seqApplyJson() {
   try {
