@@ -1580,7 +1580,8 @@ function renderStep(step, arr, idx) {
   const head = sqEl('div', { style: 'display:flex;align-items:center;gap:9px;padding:7px 10px;cursor:pointer', onclick: () => { open ? SEQ_OPEN.delete(step) : SEQ_OPEN.add(step); seqRefresh(); } });
   head.appendChild(sqEl('span', { style: 'font-size:16px;width:20px;text-align:center' }, b.icon || '▪'));
   head.appendChild(sqEl('div', { style: 'flex:1;min-width:0' },
-    sqEl('div', { style: 'font-weight:600;font-size:13px' }, step.info || b.label),
+    sqEl('div', { style: 'font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' },
+      b.label, step.info ? sqEl('span', { style: 'font-weight:400;color:#908e86' }, '  ·  ' + step.info) : null),
     sqEl('div', { style: 'font-size:11px;color:#908e86;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, b.summary(step))));
   const ctrl = sqEl('span', { style: 'display:flex;gap:2px', onclick: e => e.stopPropagation() });
   ctrl.appendChild(sqBtn('↑', () => sqMove(arr, idx, -1), 'ghost'));
