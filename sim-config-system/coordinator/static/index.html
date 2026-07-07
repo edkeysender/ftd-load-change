@@ -1452,32 +1452,67 @@ function renderIO(step, field, isInput) {
   }
   return wrap;
 }
-function renderStep(step, arr, idx) {
-  const card = sqEl('div', { style: 'border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin:6px 0;background:#fff' });
-  const head = sqEl('div', { style: 'display:flex;align-items:center;gap:6px;flex-wrap:wrap' });
-  head.appendChild(sqSel(Object.keys(SEQ_STEP_TYPES).map(k => [k, SEQ_STEP_TYPES[k].label]), step.widgetType || 'singleFunction', v => { step.widgetType = v; normalizeStep(step); seqRefresh(); }));
-  const info = sqEl('input', { style: 'flex:1;min-width:140px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', placeholder: 'info / description' });
-  info.value = step.info || ''; info.onchange = () => { step.info = info.value; seqSyncJson(); };
-  head.appendChild(info);
-  head.appendChild(sqBtn('↑', () => sqMove(arr, idx, -1), 'ghost'));
-  head.appendChild(sqBtn('↓', () => sqMove(arr, idx, 1), 'ghost'));
-  head.appendChild(sqBtn('✕', () => { arr.splice(idx, 1); seqRefresh(); }, 'ghost'));
-  card.appendChild(head);
-  const meta = sqEl('div', { style: 'display:flex;align-items:center;gap:12px;margin-top:6px' });
-  meta.appendChild(sqLabel('err code', sqNum(() => step.codeOnError, v => step.codeOnError = v)));
-  meta.appendChild(sqCheck('abort on error', step.abortOnError, v => { step.abortOnError = v; seqSyncJson(); }));
-  card.appendChild(meta);
-  card.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:4px' }, 'input'));
-  card.appendChild(renderIO(step, 'input', true));
-  if (!SEQ_STEP_TYPES[step.widgetType] || SEQ_STEP_TYPES[step.widgetType].output !== false) {
-    card.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'output'));
-    card.appendChild(renderIO(step, 'output', false));
+const SEQ_OPEN = new WeakSet();  // which step blocks are expanded for editing
+const STEP_ICON = { singleFunction: 'ƒ', sleep: '⏱', shutdownMachine: '⏻', shutdownProjector: '📽', wakeUpProjector: '📽', wakeOnLan: '📡', waitForSignal: '⏳' };
+function stepSummary(step) {
+  const t = step.widgetType, i = step.input || {}, o = step.output || {};
+  const v = x => x === undefined ? '' : (typeof x === 'object' ? JSON.stringify(x) : String(x));
+  const ip = (i.value && i.value.ip) || '';
+  if (t === 'sleep') return 'wait ' + v(i.value) + 's';
+  if (t === 'shutdownMachine') return 'shutdown ' + ip;
+  if (t === 'shutdownProjector') return 'projector OFF ' + ip;
+  if (t === 'wakeUpProjector') return 'projector ON ' + ip;
+  if (t === 'wakeOnLan') return 'Wake-on-LAN ' + ((i.value && (i.value.name || i.value.Name)) || '');
+  if (t === 'waitForSignal') return 'wait ' + (i.domain ? i.domain + '.' : '') + (i.key || '') + ' ' + ((i.value && i.value.mode) || '') + ' ' + (i.value && i.value.threshold !== undefined ? i.value.threshold : '');
+  if (t === 'singleFunction') {
+    const out = o.type === 'ARINC' ? (o.domain + '.' + o.key) : ((o.type === 'UI' || o.type === 'SUPPORT') ? o.key : '');
+    const inp = i.type === 'fixedValue' ? v(i.value) : (i.type === 'ARINC' ? (i.domain + '.' + i.key) : (i.key || ''));
+    return (out ? out + ' ← ' : '') + inp;
   }
-  return card;
+  return '';
+}
+// A step rendered as a schematic block: compact summary; click to expand + edit.
+function renderStep(step, arr, idx) {
+  const open = SEQ_OPEN.has(step);
+  const block = sqEl('div', { style: 'border:1px solid #d3d1c7;border-radius:10px;background:#fff' });
+  const head = sqEl('div', { style: 'display:flex;align-items:center;gap:9px;padding:7px 10px;cursor:pointer', onclick: () => { open ? SEQ_OPEN.delete(step) : SEQ_OPEN.add(step); seqRefresh(); } });
+  head.appendChild(sqEl('span', { style: 'font-size:16px;width:20px;text-align:center' }, STEP_ICON[step.widgetType] || '▪'));
+  head.appendChild(sqEl('div', { style: 'flex:1;min-width:0' },
+    sqEl('div', { style: 'font-weight:600;font-size:13px' }, step.info || (SEQ_STEP_TYPES[step.widgetType] && SEQ_STEP_TYPES[step.widgetType].label) || step.widgetType),
+    sqEl('div', { style: 'font-size:11px;color:#908e86;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis' }, stepSummary(step))));
+  const ctrl = sqEl('span', { style: 'display:flex;gap:2px', onclick: e => e.stopPropagation() });
+  ctrl.appendChild(sqBtn('↑', () => sqMove(arr, idx, -1), 'ghost'));
+  ctrl.appendChild(sqBtn('↓', () => sqMove(arr, idx, 1), 'ghost'));
+  ctrl.appendChild(sqBtn('✕', () => { arr.splice(idx, 1); seqRefresh(); }, 'ghost'));
+  ctrl.appendChild(sqEl('span', { style: 'color:#c9c6bd;font-size:11px;align-self:center' }, open ? '▾' : '▸'));
+  head.appendChild(ctrl);
+  block.appendChild(head);
+  if (open) {
+    const ed = sqEl('div', { style: 'padding:8px 10px;border-top:1px dashed #ece9e0', onclick: e => e.stopPropagation() });
+    const row = sqEl('div', { style: 'display:flex;align-items:center;gap:12px;flex-wrap:wrap' });
+    row.appendChild(sqLabel('type', sqSel(Object.keys(SEQ_STEP_TYPES).map(k => [k, SEQ_STEP_TYPES[k].label]), step.widgetType || 'singleFunction', val => { step.widgetType = val; normalizeStep(step); seqRefresh(); })));
+    const info = sqEl('input', { style: 'flex:1;min-width:160px;padding:3px 6px;border:1px solid #d3d1c7;border-radius:6px;font-size:12px', placeholder: 'info / description' });
+    info.value = step.info || ''; info.onchange = () => { step.info = info.value; seqSyncJson(); };
+    row.appendChild(sqLabel('info', info));
+    row.appendChild(sqLabel('err code', sqNum(() => step.codeOnError, x => step.codeOnError = x)));
+    row.appendChild(sqCheck('abort on error', step.abortOnError, x => { step.abortOnError = x; seqSyncJson(); }));
+    ed.appendChild(row);
+    ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86;margin-top:6px' }, 'input'));
+    ed.appendChild(renderIO(step, 'input', true));
+    if (!SEQ_STEP_TYPES[step.widgetType] || SEQ_STEP_TYPES[step.widgetType].output !== false) {
+      ed.appendChild(sqEl('div', { style: 'font-size:10px;color:#908e86' }, 'output'));
+      ed.appendChild(renderIO(step, 'output', false));
+    }
+    block.appendChild(ed);
+  }
+  return block;
 }
 function renderStepList(arr) {
   const box = sqEl('div', {});
-  arr.forEach((s, i) => box.appendChild(renderStep(s, arr, i)));
+  arr.forEach((s, i) => {
+    box.appendChild(renderStep(s, arr, i));
+    box.appendChild(sqEl('div', { style: 'text-align:center;color:#c9c6bd;font-size:13px;line-height:15px;height:15px' }, '↓'));  // connector
+  });
   box.appendChild(sqBtn('+ Add step', () => { arr.push({ widgetType: 'singleFunction', abortOnError: false, info: '', codeOnError: 0, input: { type: 'fixedValue', value: 0 }, output: {} }); seqRefresh(); }, 'ghost'));
   return box;
 }
