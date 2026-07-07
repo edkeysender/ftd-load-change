@@ -179,11 +179,10 @@
         <div>
           <div style="font-size:13px;margin-bottom:5px"><b>Step 3.</b> Create &amp; deploy the dev version to the sim</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="ghost" onclick="reviewChanges()">Review changes</button>
-            <button class="warn" onclick="deployAsDevLoad()">Deploy as Development Load</button>
+            <button class="warn" onclick="reviewChanges()">Review changes &amp; deploy…</button>
             <span id="config-status" class="hint" style="margin:0"></span>
           </div>
-          <div class="hint" style="margin-top:4px">Review changes = diff the loaded dev load vs what's live · Deploy = import all PCs → commit → create the dev version, in one step.</div>
+          <div class="hint" style="margin-top:4px">Shows the files you edited live on each PC vs the dev version you loaded. If it looks right, Deploy captures them into a new dev version and deploys it.</div>
         </div>
       </div>
     </div>
@@ -979,41 +978,54 @@ function startNewDevLoad() {
   showConfigTab('browser');
   reloadTree();
 }
-// Step 1 — Review changes: what folders/excludes you've changed in this load vs the
-// dev version it was loaded from. (Config-level; live file content is captured on Import
-// and viewable per-PC via the 'diff' button in PC status.)
-function manifestDiff(a, b) {
-  const out = [], aPcs = (a && a.pcs) || {}, bPcs = (b && b.pcs) || {};
-  const byLive = apps => { const m = {}; Object.values(apps || {}).forEach(x => { const p = (x.live && x.live[0]) || ''; if (p) m[p] = x; }); return m; };
-  new Set([...Object.keys(aPcs), ...Object.keys(bPcs)]).forEach(ip => {
-    const A = byLive((aPcs[ip] || {}).apps), B = byLive((bPcs[ip] || {}).apps);
-    new Set([...Object.keys(A), ...Object.keys(B)]).forEach(p => {
-      if (!A[p]) out.push({ color: '#1d7a59', text: '+ ' + ip + '  add folder  ' + p });
-      else if (!B[p]) out.push({ color: '#c0392b', text: '− ' + ip + '  remove folder  ' + p });
-      else {
-        const ae = (A[p].exclude || []).join(', '), be = (B[p].exclude || []).join(', ');
-        if (ae !== be) out.push({ color: '#99641a', text: '~ ' + ip + '  ' + p + '  ignore: [' + be + ']' });
-      }
-    });
-  });
-  return out;
-}
+// Review changes: the files you edited LIVE on each PC vs the dev version currently
+// deployed there (training-live). This is the real "what did I change" — asks every PC's
+// agent for its drift and aggregates. From here, Deploy captures + versions those edits.
+let reviewDrift = {};   // ip -> drift entries
 async function reviewChanges() {
-  flushSelection();  // fold in the PC currently on screen
-  const ref = lastDevTag || 'dev';
-  $('drift-title').textContent = 'Review changes vs ' + ref;
-  $('drift-body').innerHTML = '<div class="muted">Comparing…</div>';
+  const ref = LIVE.tag || lastDevTag || 'the deployed version';
+  $('drift-title').textContent = 'Review changes — your live edits vs ' + ref;
+  $('drift-body').innerHTML = '<div class="muted">Asking each PC what changed live…</div>';
   $('drift-modal').style.display = 'flex';
-  let base = { pcs: {} };
-  try { base = (await api('GET', '/manifest/at?ref=' + encodeURIComponent(ref))).manifest || { pcs: {} }; } catch (e) {}
-  const diffs = manifestDiff(base, manifestObj || { pcs: {} });
-  const note = '<div class="hint" style="margin-top:0">Config (folders / ignores) vs <b>' + esc(ref) + '</b>. File-content changes are captured on Import — use a PC\'s <b>diff</b> in PC status to see live-vs-version file changes.</div>';
-  if (!diffs.length) { $('drift-body').innerHTML = note + '<div class="ok" style="margin-top:8px">No config changes vs ' + esc(ref) + '.</div>'; return; }
-  $('drift-body').innerHTML = note + diffs.map(d => '<div style="font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 0;color:' + d.color + '">' + esc(d.text) + '</div>').join('');
+  const ips = Object.keys((manifestObj && manifestObj.pcs) || {});
+  if (!ips.length) { $('drift-body').innerHTML = '<div class="muted">No PCs in this load.</div>'; return; }
+  reviewDrift = {};
+  const results = await Promise.all(ips.map(async ip => {
+    try { const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/drift'); reviewDrift[ip] = d.entries || []; return { ip, entries: d.entries || [] }; }
+    catch (e) { return { ip, error: e.message }; }
+  }));
+  renderReview(ref, results);
 }
+function renderReview(ref, results) {
+  const total = results.reduce((n, r) => n + (r.entries ? r.entries.length : 0), 0);
+  const pcBlocks = results.map(r => {
+    const head = '<div style="margin-top:12px;display:flex;align-items:center;gap:8px"><b>' + esc(r.ip) + '</b>';
+    if (r.error) return head + ' <span class="bad" style="font-size:12px">offline / busy — can\'t check</span></div>';
+    if (!r.entries.length) return head + ' <span class="ok" style="font-size:12px">no live edits</span></div>';
+    const byApp = {};
+    r.entries.forEach((e, idx) => { (byApp[e.app] = byApp[e.app] || []).push({ e, idx }); });
+    return head + ' <span class="muted" style="font-size:12px">' + r.entries.length + ' changed file(s)</span></div>' +
+      Object.entries(byApp).map(([app, items]) =>
+        '<div style="margin-top:4px;padding-left:8px"><span class="muted" style="font-size:12px">' + esc(app) + '</span>' +
+        items.map(({ e, idx }) => {
+          const k = DRIFT_KIND[e.kind] || { label: e.kind, color: '#777' };
+          return '<div onclick="reviewFileDiff(\'' + esc(r.ip) + '\',' + idx + ')" style="cursor:pointer;font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 6px;display:flex;gap:8px;border-radius:6px" onmouseover="this.style.background=\'#f3f1ea\'" onmouseout="this.style.background=\'\'">' +
+            '<span style="color:' + k.color + ';min-width:96px;flex-shrink:0">' + esc(k.label) + '</span>' +
+            '<span style="word-break:break-all;text-decoration:underline">' + esc(e.path) + '</span></div>';
+        }).join('') + '</div>'
+      ).join('');
+  }).join('');
+  const legend = '<div class="hint" style="margin-top:0"><span style="color:#c0392b">missing in live</span> · <span style="color:#99641a">modified</span> · <span style="color:#5b3ea6">added in live</span> — click a file for its diff.</div>';
+  const deployBtn = total
+    ? '<button class="warn" style="width:100%;font-size:14px" onclick="closeDriftModal();deployAsDevLoad()">Deploy — capture these changes into a new dev version</button>'
+    : '<div class="muted" style="font-size:13px">Nothing to deploy — live matches ' + esc(ref) + '.</div>';
+  $('drift-body').innerHTML = legend + pcBlocks +
+    '<div style="position:sticky;bottom:0;background:#fff;padding-top:12px;margin-top:12px;border-top:1px solid #eee">' + deployBtn + '</div>';
+}
+function reviewFileDiff(ip, idx) { driftCtx = { ip, entries: reviewDrift[ip] || [] }; showFileDiff(idx); }
 
-// Step 2 — Deploy as Development Load: save → import every PC → commit → create the
-// dev version, with a two-phase progress modal ending in the new version's link.
+// Deploy: save → import every PC (captures the live edits) → commit → create the dev
+// version → deploy it, with a two-phase progress modal ending in the new version's link.
 let devloadBusy = false;
 const dlStatus = (m, c) => { const e = $('dl-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
 function closeDevload() { if (!devloadBusy) $('devload-modal').style.display = 'none'; }
@@ -1057,10 +1069,12 @@ async function deployAsDevLoad() {
     dlStatus('creating the dev version…', '');
     const snap = await api('POST', '/dev/snapshot', { message: feedback, author });
     $('dl-bar1').style.width = '100%'; $('dl-bar2').style.width = '100%';
+    dlStatus('deploying <b>' + esc(snap.tag) + '</b> to the sim…', '');
+    await api('POST', '/deploy', { ref: snap.tag });  // make the new version the live one
     $('newload-label').textContent = '';
     devloadBusy = false; $('devload-close').style.display = '';
     $('devload-body').innerHTML = '<div style="text-align:center;padding:16px 0">' +
-      '<div style="font-size:15px;font-weight:700;color:#1d7a59;margin-bottom:10px">✓ Development load created</div>' +
+      '<div style="font-size:15px;font-weight:700;color:#1d7a59;margin-bottom:10px">✓ ' + esc(snap.tag) + ' created &amp; deployed</div>' +
       '<button class="warn" style="font-size:14px" onclick="gotoDevLoad()">' + esc(snap.tag) + ' → open in Loads</button></div>';
     lastDevTag = snap.tag;
     await refresh();
