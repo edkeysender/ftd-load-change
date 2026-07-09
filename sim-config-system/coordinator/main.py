@@ -5,6 +5,7 @@ read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
 import json
+import socket
 import subprocess
 import threading
 import time
@@ -579,6 +580,44 @@ def agent_forget(pc_ip: str):
     return {"forgotten": pc_ip}
 
 
+@app.post("/agents/{pc_ip}/shutdown")
+def agent_shutdown(pc_ip: str):
+    """Queue a force shutdown (shutdown /s /f /t 0) on that PC's agent. The agent
+    must be online to pick it up; it powers off within a heartbeat."""
+    manifest.enqueue(pc_ip, {"type": "shutdown"})
+    return {"ok": True, "pc_ip": pc_ip}
+
+
+def _send_wol(mac: str):
+    """Broadcast a Wake-on-LAN magic packet for `mac` on the LAN (UDP :9)."""
+    hexmac = mac.replace(":", "").replace("-", "").strip()
+    raw = bytes.fromhex(hexmac)
+    if len(raw) != 6:
+        raise ValueError("bad MAC: " + mac)
+    packet = b"\xff" * 6 + raw * 16
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        s.sendto(packet, ("255.255.255.255", 9))
+    finally:
+        s.close()
+
+
+@app.post("/agents/{pc_ip}/wake")
+def agent_wake(pc_ip: str):
+    """Wake a powered-off PC by its last-known MAC. Needs the agent to have
+    checked in (or LAN discovery to have seen it) at least once."""
+    mac = db.agent_mac(pc_ip)
+    if not mac:
+        raise HTTPException(400, "no MAC on record for this PC yet — it must check in "
+                                 "once while online (or run LAN discovery) before it can be woken")
+    try:
+        _send_wol(mac)
+    except (ValueError, OSError) as e:
+        raise HTTPException(500, "wake failed: " + str(e))
+    return {"ok": True, "pc_ip": pc_ip, "mac": mac}
+
+
 @app.get("/agents/{pc_ip}/update-pending")
 def update_pending(pc_ip: str, authorization: str | None = Header(None)):
     _auth(authorization)
@@ -754,12 +793,13 @@ class Heartbeat(BaseModel):
     clean: bool = True
     version: str | None = None
     error: str | None = None
+    mac: str | None = None
 
 
 @app.post("/agents/{pc_ip}/heartbeat")
 def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None)):
     _auth(authorization)
-    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version)
+    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version, hb.mac)
     _agent_errors[hb.pc_ip] = hb.error if (hb.mode == "ERROR" and hb.error) else None
     dp = _deploy_progress.get(hb.pc_ip)
     if dp and dp.get("state") == "syncing" and hb.mode == "ERROR":

@@ -396,8 +396,13 @@ function renderGrid(pcs, agents) {
       <td>${clean}</td>
       <td class="muted">${ago(a.last_seen)}</td>
       <td><span class="muted" style="font-size:11px">${esc(a.version||'—')}</span>
-          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="updateAgent('${esc(p.ip)}')">update</button>
-          <button class="ghost" style="padding:2px 8px;font-size:11px" onclick="forgetPc('${esc(p.ip)}')">remove</button></td></tr>`;
+          <select onchange="pcAction('${esc(p.ip)}',this)" style="font-size:11px;padding:2px 4px;border:1px solid #d3d1c7;border-radius:6px;background:#fff;cursor:pointer">
+            <option value="">⋯ actions</option>
+            <option value="update">Update agent</option>
+            <option value="wake">Wake on LAN</option>
+            <option value="shutdown">Force shut down</option>
+            <option value="remove">Remove from list</option>
+          </select></td></tr>`;
   }).join('') || '<tr><td colspan="8" class="muted">No PCs in manifest.</td></tr>';
 }
 
@@ -676,6 +681,13 @@ const removeHost = ip => act(() => api('POST', '/discover/remove', { ip }), ip +
 const updateAgent = ip => act(() => api('POST', '/agents/' + ip + '/update', {}), 'Update requested for ' + ip + ' — agent self-updates within ~25s, or on next start, then syncs');
 const updateAllAgents = () => confirm('Request a self-update on every PC?') && act(() => api('POST', '/agents/update', {}), 'Update requested for all agents');
 const forgetPc = ip => confirm('Remove ' + ip + ' from PC status? It reappears automatically if that PC\'s agent checks in again.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/forget', {}), ip + ' removed from PC status');
+const wakePc = ip => act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/wake', {}), 'Wake-on-LAN packet sent to ' + ip + ' — it should power on shortly');
+const shutdownPc = ip => confirm('Force shut down ' + ip + '? Running apps are killed and the PC powers off immediately. Its agent must be online to receive this.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/shutdown', {}), 'Force shutdown sent to ' + ip);
+// PC status per-row action dropdown -> dispatch, then reset so the same item re-fires.
+function pcAction(ip, sel) {
+  const v = sel.value; sel.value = '';
+  ({ update: updateAgent, wake: wakePc, shutdown: shutdownPc, remove: forgetPc }[v] || (() => {}))(ip);
+}
 async function driftPc(ip) {
   showDriftModal(ip, null);                       // loading state
   try {

@@ -179,6 +179,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doGuard(c) // run a per-PC compliance check/apply script
 	case "update":
 		a.doUpdate(c) // download new build, swap exe, relaunch
+	case "shutdown":
+		a.doShutdown(c) // PC status: force power off this PC
 	default:
 		log.Printf("unknown command: %s", c.Type)
 	}
@@ -191,6 +193,7 @@ func (a *Agent) heartbeat() {
 	a.api.Heartbeat(Heartbeat{
 		PCIP: a.cfg.PCIP, Folder: a.cfg.Folder,
 		Mode: string(st), CurrentRef: ref, Clean: clean, Version: Version, Error: errMsg,
+		MAC: localMAC(a.cfg.PCIP),
 	})
 }
 

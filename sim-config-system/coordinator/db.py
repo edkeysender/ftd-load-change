@@ -95,21 +95,28 @@ def init():
             c.execute("ALTER TABLE agents ADD COLUMN version TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Migration for the agents.mac column (Wake-on-LAN).
+        try:
+            c.execute("ALTER TABLE agents ADD COLUMN mac TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 # --- agents -------------------------------------------------------------
-def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None):
-    # version is COALESCE'd so callers that don't know it (deploy-result) don't wipe it.
+def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None, mac=None):
+    # version + mac are COALESCE'd so callers that don't know them (deploy-result)
+    # don't wipe the last-known values.
     with conn() as c:
         c.execute(
-            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version)
-               VALUES (?,?,?,?,?,?,?)
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version, mac)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(pc_ip) DO UPDATE SET
                  folder=excluded.folder, mode=excluded.mode,
                  current_ref=excluded.current_ref, clean=excluded.clean,
                  last_seen=excluded.last_seen,
-                 version=COALESCE(excluded.version, agents.version)""",
-            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version),
+                 version=COALESCE(excluded.version, agents.version),
+                 mac=COALESCE(excluded.mac, agents.mac)""",
+            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version, mac),
         )
         # A detected agent un-hides a PC that was manually removed from PC status.
         c.execute("DELETE FROM dismissed_pcs WHERE pc_ip=?", (pc_ip,))
@@ -122,6 +129,17 @@ def list_agents():
     for r in rows:
         r["online"] = (now - (r["last_seen"] or 0)) < config.HEARTBEAT_TIMEOUT
     return rows
+
+
+def agent_mac(pc_ip):
+    """Last-known MAC for a PC (for Wake-on-LAN). Falls back to a MAC learned by
+    LAN discovery. None if we've never seen one."""
+    with conn() as c:
+        row = c.execute("SELECT mac FROM agents WHERE pc_ip=?", (pc_ip,)).fetchone()
+        if row and row["mac"]:
+            return row["mac"]
+        row = c.execute("SELECT mac FROM discovered_hosts WHERE ip=?", (pc_ip,)).fetchone()
+        return row["mac"] if row and row["mac"] else None
 
 
 def forget_agent(pc_ip):

@@ -74,7 +74,8 @@ Open `http://<pi-ip>:8090/` for the dashboard (served by the coordinator, single
 no build step), organised into three top tabs:
 
 - **Loads** — PC status grid (online / mode `TRAINING`\|`TESTING` / running version /
-  clean-vs-dirty, with a per-PC *diff* of drifted files, plus *update* / *remove*);
+  clean-vs-dirty, with a per-PC *diff* of drifted files, plus a per-PC **actions**
+  dropdown: *Update agent* / *Wake on LAN* / *Force shut down* / *Remove from list*);
   **Training Loads** (immutable `v1.x`, deploy any to the whole sim, *Re-deploy live*);
   and **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* / *Redeploy testing*,
   then *Promote to Training Load*); and **Compare** (diff any two versions).
@@ -131,7 +132,9 @@ Guards / installs / global ignore: `GET /guards`, `POST /guard/check|apply|check
 Agent-facing: `GET /whoami`, `POST /agents/{ip}/heartbeat`, `GET /agents/{ip}/commands`,
 `GET /agents/{ip}/enforce`, `GET /agents/{ip}/browse|drift|filediff`,
 `POST /agents/{ip}/{import|size-report|capture|deploy|drift|filediff|guard|install}-result`,
-`POST /agents/{ip}/update|forget`, `GET /agent/binary`.
+`POST /agents/{ip}/update|forget|shutdown|wake`, `GET /agent/binary`.
+Wake-on-LAN uses the PC's last-known MAC (reported on every heartbeat); force
+shutdown is queued for the agent (`shutdown /s /f /t 0`).
 Discovery (endpoints still exist; the panel is hidden — agents self-register via heartbeat):
 `POST|GET /discover`, `POST /discover/add|remove`, `GET /hosts`. Helper: `deploy/discover.sh`.
 
