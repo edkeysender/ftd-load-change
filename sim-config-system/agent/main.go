@@ -113,16 +113,23 @@ func (a *Agent) Run() {
 	// reports its drift so PC status shows what changed; files/apps change only on an
 	// explicit Deploy. (This preserves live edits across reboots.)
 	if a.cfg.enforceOnStart() {
-		if cmd, err := a.api.GetEnforce(); err != nil {
-			log.Printf("enforce-on-start: %v (will rely on polled commands)", err)
-		} else if cmd != nil {
-			if repoCloned(a.cfg) {
-				a.remember(*cmd, CheckClean(a.cfg, cmd.Apps))
-				a.setState(StateTraining)
-				log.Printf("startup: adopted %s — no resync (sync is on-demand only); reporting drift", cmd.Ref)
-			} else {
-				log.Printf("startup: %s never deployed here — staying UNSEEDED until a Deploy", cmd.Ref)
+		cmd, err := a.api.GetEnforce()
+		if err != nil || cmd == nil {
+			// Coordinator unreachable, or it didn't name a live load — fall back to the
+			// load we persisted the last time we adopted/deployed, so an already-deployed
+			// PC still comes up as TRAINING/TESTING + drift instead of UNSEEDED.
+			if cmd = a.loadSavedLoad(); cmd != nil && err != nil {
+				log.Printf("enforce-on-start: %v — using last known load %s", err, cmd.Ref)
 			}
+		}
+		if cmd != nil && repoCloned(a.cfg) {
+			a.remember(*cmd, CheckClean(a.cfg, cmd.Apps))
+			a.setState(StateTraining)
+			log.Printf("startup: adopted %s — no resync (sync is on-demand only); reporting drift", cmd.Ref)
+		} else if cmd != nil {
+			log.Printf("startup: %s never deployed here — staying UNSEEDED until a Deploy", cmd.Ref)
+		} else {
+			log.Printf("startup: no live load known — staying UNSEEDED until a Deploy")
 		}
 	}
 
@@ -209,4 +216,5 @@ func (a *Agent) remember(c Command, clean bool) {
 	a.mu.Lock()
 	a.apps, a.ref, a.clean = c.Apps, c.Ref, clean
 	a.mu.Unlock()
+	a.saveLoad(c.Ref, c.Apps) // persist so a restart can re-adopt without the coordinator
 }
