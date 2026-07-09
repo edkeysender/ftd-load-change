@@ -453,6 +453,7 @@ function renderDevVersions(v) {
       <td class="row-actions">
         ${isLive ? '<span class="muted">on sim</span>' : `<button class="ghost" onclick="deployRef('${esc(x.tag)}')">Deploy to sim</button>`}
         <button class="warn" onclick="promoteDev('${esc(x.tag)}')">Promote To Training Load</button>
+        ${isLive ? '' : `<button class="ghost" onclick="deleteDevLoad('${esc(x.tag)}')" title="Delete this dev load">🗑 Delete</button>`}
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="muted">No dev versions yet — create one in PC Images or here.</td></tr>';
@@ -550,6 +551,7 @@ const redeployTesting = () => {
   if (!confirm('Re-sync ' + activeTestingTag + ' to the whole sim?')) return;
   act(() => api('POST', '/deploy', { ref: activeTestingTag }), 'Re-syncing ' + activeTestingTag + ' to the sim…').then(pollDeploy);
 };
+const deleteDevLoad = tag => confirm('Delete dev load ' + tag + '?\n\nThis removes its git tag (local + Forgejo) and drops it from the list. It cannot be undone. The load currently live on the sim cannot be deleted.') && act(() => api('DELETE', '/dev/versions/' + encodeURIComponent(tag)), tag + ' deleted');
 const fmtEta = s => { s = Math.max(0, Math.round(s)); return s >= 60 ? Math.floor(s / 60) + 'm ' + (s % 60) + 's' : s + 's'; };
 // Live sync bar for the current deploy. % and ETA are projected from each PC's last
 // deploy time (until we've timed one, a 60s default is used). robocopy /MIR copies

@@ -216,6 +216,11 @@ def list_dev_versions():
         return [dict(r) for r in c.execute("SELECT * FROM dev_versions ORDER BY created_at DESC")]
 
 
+def delete_dev_version(tag):
+    with conn() as c:
+        c.execute("DELETE FROM dev_versions WHERE tag=?", (tag,))
+
+
 def next_dev_tag():
     """A dev build is named after the training version it works toward: dev-v<next>.
     If that name already exists (another candidate for the same release), append the

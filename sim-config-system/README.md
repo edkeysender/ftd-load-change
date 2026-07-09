@@ -78,7 +78,8 @@ no build step), organised into three top tabs:
   dropdown: *Update agent* / *Wake on LAN* / *Force shut down* / *Remove from list*);
   **Training Loads** (immutable `v1.x`, deploy any to the whole sim, *Re-deploy live*);
   and **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* / *Redeploy testing*,
-  then *Promote to Training Load*); and **Compare** (diff any two versions).
+  then *Promote to Training Load*, or *Delete* to discard one — the live one is protected);
+  and **Compare** (diff any two versions).
 - **Load Configuration** — **Sync Configuration** (pick folders per PC from a live tree;
   uncheck a subfolder to *ignore* it; raw-YAML tab). Opens defaulted to the **last dev
   load**'s config. Typical dev loop: deploy the last dev version, tweak files **live** on
@@ -122,8 +123,8 @@ Operator: `GET /pcs`, `GET /versions`, `GET /dev/versions`, `GET /dev/readiness`
 `GET /bootstrap`, `GET /config`, `GET|PUT /manifest/json`, `PUT /manifest/raw`,
 `GET /manifest/at?ref`, `GET /manifest/pcs`, `POST /import/{pc}`,
 `POST /import/{pc}/size-report`, `POST /seal-baseline`, `POST /deploy`,
-`POST /dev/snapshot`, `GET /diff`, `POST /promote` (+ `GET /promote/status`),
-`POST /rollback`.
+`POST /dev/snapshot`, `DELETE /dev/versions/{tag}`, `GET /diff`,
+`POST /promote` (+ `GET /promote/status`), `POST /rollback`.
 Guards / installs / global ignore: `GET /guards`, `POST /guard/check|apply|check-all`,
 `GET /installs`, `POST /install`, `PUT|GET /installs/asset/{name}`, `GET|PUT /global-ignore`.
 Agent-facing: `GET /whoami`, `POST /agents/{ip}/heartbeat`, `GET /agents/{ip}/commands`,

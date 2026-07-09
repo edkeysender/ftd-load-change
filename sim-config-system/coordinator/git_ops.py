@@ -348,6 +348,15 @@ def snapshot_dev(tag: str, message: str, author: str):
         return sha
 
 
+def delete_dev(tag: str):
+    """Discard a dev test tag: delete it locally and on the remote. Callers must
+    ensure it isn't the live load first — this just removes the ref."""
+    with _WRITE_LOCK:
+        _git("tag", "-d", tag, check=False)
+        if _has_remote():
+            _git("push", "origin", "--delete", tag, check=False)
+
+
 def changed_files(base: str, head: str):
     r = _git("diff", "--name-status", f"{base}..{head}", check=False)
     if r.returncode != 0:

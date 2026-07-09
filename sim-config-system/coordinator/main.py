@@ -658,6 +658,21 @@ def dev_versions():
     return {"versions": db.list_dev_versions(), "training_live_sha": live}
 
 
+@app.delete("/dev/versions/{tag}")
+def delete_dev_version(tag: str):
+    """Discard a dev load: delete its git tag (local + remote) and DB row. Refused
+    if it's the load currently live on the sim — deploy another load first."""
+    row = next((v for v in db.list_dev_versions() if v["tag"] == tag), None)
+    if not row:
+        raise HTTPException(404, "no such dev load")
+    live = git_ops.ref_sha(config.TRAINING_LIVE) if (config.WORK_CLONE / ".git").exists() else None
+    if live and row.get("commit_sha") == live:
+        raise HTTPException(409, "that dev load is live on the sim — deploy another load first")
+    git_ops.delete_dev(tag)
+    db.delete_dev_version(tag)
+    return {"deleted": tag}
+
+
 def _dev_readiness():
     """Per-PC readiness for creating a dev version: has each PC in the load had its
     content imported to dev since the last manifest change? Gates 'Deploy as Dev' so
