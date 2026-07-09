@@ -814,28 +814,17 @@ def commands(pc_ip: str, authorization: str | None = Header(None)):
     return {"command": manifest.wait_command(pc_ip)}  # long-poll up to ~25s
 
 
-def _live_is_dev() -> bool:
-    """True if training-live points at a dev/test build (dev-N) rather than a customer
-    training version (v1.x). Used to keep a dev load from auto-launching on reboot."""
-    live = git_ops.ref_sha(config.TRAINING_LIVE)
-    if not live:
-        return False
-    return any(v.get("commit_sha") == live for v in db.list_dev_versions())
-
-
 @app.get("/agents/{pc_ip}/enforce")
 def enforce(pc_ip: str, authorization: str | None = Header(None)):
-    """Boot-time deploy command for this PC: sync + launch the training-live load.
-    Null until v1.0 is sealed, if the PC isn't in the manifest, OR if a DEV/test load
-    is live — a dev load must not auto-resync/launch on a PC reboot; it waits for an
-    explicit Deploy. Only a customer training load (v1.x) auto-recovers on boot."""
+    """Boot-time load info for this PC (training OR dev). The agent ADOPTS this ref
+    and reports its clean/dirty drift so PC status shows the current mode + state —
+    but it NEVER resyncs or relaunches on start. Files/apps change only on an explicit
+    Deploy. Null until v1.0 is sealed or if the PC isn't in the manifest."""
     _auth(authorization)
     if pc_ip not in manifest.load_manifest()["pcs"]:
         return {"command": None}
     if not git_ops.ref_sha(config.TRAINING_LIVE):
         return {"command": None}
-    if _live_is_dev():
-        return {"command": None}  # dev/test load — don't auto-launch on cold boot
     return {"command": _mirror_cmd(pc_ip, "deploy", config.TRAINING_LIVE)}
 
 

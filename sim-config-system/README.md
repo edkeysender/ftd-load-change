@@ -97,27 +97,24 @@ Enter your name (top-right) — it's recorded as the author of seals, promotes a
 
 ## Agent startup / reboot behaviour
 
-What the agent does when it starts depends on what is running and what is live:
+**Sync is on-demand only.** The agent NEVER resyncs or launches on start — for a
+training OR a dev load. The only thing that mirrors files or (re)starts apps is an
+explicit **Deploy / Redeploy** from the dashboard.
 
 | Scenario | Resync? | Apps launched? |
 | --- | --- | --- |
-| **PC reboot, a training load (`v1.x`) is live** | ✅ yes (diff-only) | ✅ yes |
-| **PC reboot, a dev/test load (`dev-N`) is live** | ❌ no | ❌ no — waits for a manual **Deploy** |
-| **Agent restarted while the sim is running** | ❌ no (adopts state) | ❌ no |
-| **Agent self-update** | ❌ no (adopts state) | ❌ no |
+| **Any agent/PC start** — training or dev load live | ❌ no | ❌ no |
+| **Explicit Deploy / Redeploy** (dashboard) | ✅ yes (diff-only) | ✅ yes |
 
-- On a **cold boot** the agent asks the coordinator (`GET /agents/{ip}/enforce`) for
-  the `training-live` load and syncs + launches it — but **only if `training-live` is
-  a customer training version**. If a **dev/test load** is live, `enforce` returns
-  nothing, so the PC stays idle until someone clicks **Deploy** again. Dev loads are
-  transient and must not auto-resume on a reboot; only production training loads
-  auto-recover.
-- Syncs are **diff-only** (`robocopy /MIR`), so re-launching an unchanged load copies
-  nothing — the time is the apps' `start_delay` sequence, not the file copy.
-- Restarting just the **agent** (sim still up) or a **self-update** never re-syncs or
-  restarts the apps — the agent adopts the deployed state and resumes monitoring.
-- To make a PC **never** auto-launch on boot (always wait for a manual Deploy), set
-  `"enforce_on_start": false` in that PC's `agent.json`.
+- On start the agent asks the coordinator (`GET /agents/{ip}/enforce`) which load is
+  live, **adopts** that ref, and computes its **clean/dirty drift** — so PC status
+  shows the current **mode** and **state** — but it does **not** touch a single file.
+  Live edits survive reboots; a powered-off sim stays off until someone clicks Deploy.
+- A PC that has **never been deployed** here stays `UNSEEDED` until its first Deploy.
+- **Deploy / Redeploy** is the only sync path: `robocopy /MIR` diff-only mirror
+  (unchanged files copy nothing) followed by the apps' `start_delay` launch sequence.
+- To keep a PC from even adopting/reporting on boot, set `"enforce_on_start": false`
+  in that PC's `agent.json`.
 
 ## API summary
 

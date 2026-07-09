@@ -108,23 +108,20 @@ func (a *Agent) Run() {
 	// sync, so the sync always runs on the latest agent.
 	a.checkAndUpdate()
 
-	// Boot-time enforce: sync training-live and launch the apps BEFORE anything
-	// else runs. This is what guarantees apps never start before a full sync —
-	// the agent owns the launch, so remove the apps from Windows auto-start.
+	// Boot-time: sync is ON-DEMAND ONLY. The agent NEVER resyncs or (re)launches on
+	// start — for training OR dev loads. It adopts whatever load is live and just
+	// reports its drift so PC status shows what changed; files/apps change only on an
+	// explicit Deploy. (This preserves live edits across reboots.)
 	if a.cfg.enforceOnStart() {
 		if cmd, err := a.api.GetEnforce(); err != nil {
 			log.Printf("enforce-on-start: %v (will rely on polled commands)", err)
 		} else if cmd != nil {
-			// Don't redeploy when the agent is just restarted while the sim is already
-			// running (or right after a self-update): adopt the deployed state and wait
-			// for an explicit Deploy signal. Only a cold boot (sim down) deploys+launches.
-			if a.postUpdate || (repoCloned(a.cfg) && appsRunning(cmd.Apps)) {
+			if repoCloned(a.cfg) {
 				a.remember(*cmd, CheckClean(a.cfg, cmd.Apps))
 				a.setState(StateTraining)
-				log.Printf("startup: adopted %s without redeploy (sim already running / post-update)", cmd.Ref)
+				log.Printf("startup: adopted %s — no resync (sync is on-demand only); reporting drift", cmd.Ref)
 			} else {
-				log.Printf("enforce-on-start: deploying %s", cmd.Ref)
-				a.dispatch(*cmd)
+				log.Printf("startup: %s never deployed here — staying UNSEEDED until a Deploy", cmd.Ref)
 			}
 		}
 	}
