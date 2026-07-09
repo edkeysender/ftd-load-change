@@ -378,9 +378,10 @@ func CheckClean(cfg AgentConfig, apps map[string]AppSpec) bool {
 // and the live directory. Kind: "new" = in the version, missing from live;
 // "changed" = present in both but different; "extra" = in live, not in the version.
 type DriftEntry struct {
-	App  string `json:"app"`
-	Kind string `json:"kind"`
-	Path string `json:"path"`
+	App   string  `json:"app"`
+	Kind  string  `json:"kind"`
+	Path  string  `json:"path"`
+	Mtime float64 `json:"mtime,omitempty"` // live file's mod time (unix s); 0 if not in live
 }
 
 var driftLineRe = regexp.MustCompile(`(?i)^\s*(\*EXTRA File|New File|Newer|Older|Changed)\s+\d+\s+(.+?)\s*$`)
@@ -442,7 +443,11 @@ func driftDiff(src, dst string, xd, xf []string, app string) []DriftEntry {
 				break
 			}
 		}
-		entries = append(entries, DriftEntry{App: app, Kind: kind, Path: rel})
+		var mtime float64
+		if fi, err := os.Stat(filepath.Join(dst, rel)); err == nil {
+			mtime = float64(fi.ModTime().Unix()) // when the live file was last changed
+		}
+		entries = append(entries, DriftEntry{App: app, Kind: kind, Path: rel, Mtime: mtime})
 	}
 	return entries
 }

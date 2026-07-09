@@ -813,7 +813,8 @@ function showDriftModal(ip, entries, err) {
           const k = DRIFT_KIND[e.kind] || { label: e.kind, color: '#777' };
           return '<div onclick="showFileDiff(' + idx + ')" style="cursor:pointer;font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:3px 6px;display:flex;gap:8px;border-radius:6px" onmouseover="this.style.background=\'#f3f1ea\'" onmouseout="this.style.background=\'\'">' +
             '<span style="color:' + k.color + ';min-width:96px;flex-shrink:0">' + esc(k.label) + '</span>' +
-            '<span style="word-break:break-all;text-decoration:underline">' + esc(e.path) + '</span></div>';
+            '<span style="word-break:break-all;text-decoration:underline;flex:1">' + esc(e.path) + '</span>' +
+            '<span class="muted" style="flex-shrink:0" title="live file last modified">' + (e.mtime ? ago(e.mtime) : '') + '</span></div>';
         }).join('') + '</div>'
       ).join('');
   }
@@ -1050,7 +1051,8 @@ function renderReview(ref, cfg, results) {
           const k = DRIFT_KIND[e.kind] || { label: e.kind, color: '#777' };
           return '<div onclick="reviewFileDiff(\'' + esc(r.ip) + '\',' + idx + ')" style="cursor:pointer;font-family:ui-monospace,Consolas,monospace;font-size:12px;padding:2px 6px;display:flex;gap:8px;border-radius:6px" onmouseover="this.style.background=\'#f3f1ea\'" onmouseout="this.style.background=\'\'">' +
             '<span style="color:' + k.color + ';min-width:96px;flex-shrink:0">' + esc(k.label) + '</span>' +
-            '<span style="word-break:break-all;text-decoration:underline">' + esc(e.path) + '</span></div>';
+            '<span style="word-break:break-all;text-decoration:underline;flex:1">' + esc(e.path) + '</span>' +
+            '<span class="muted" style="flex-shrink:0" title="live file last modified">' + (e.mtime ? ago(e.mtime) : '') + '</span></div>';
         }).join('') + '</div>'
       ).join('');
   }).join('');
