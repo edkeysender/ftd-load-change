@@ -16,12 +16,24 @@ if (-not $ad) { Write-Output "no adapter for interface index $idx"; exit 1 }
 
 $did = @()
 try {
+  # Magic packet on; pattern wake off so LAN broadcast chatter can't wake the PC by
+  # itself. We deliberately do NOT untick "allow the computer to turn off this device":
+  # Windows treats wake as a sub-option of it, so clearing the parent stops wake being
+  # armed - the usual reason WoL never works from a powered-off PC. The power guard
+  # exempts this NIC to match.
   Set-NetAdapterPowerManagement -Name $ad.Name -WakeOnMagicPacket Enabled -WakeOnPattern Disabled `
-    -AllowComputerToTurnOffDevice Disabled -ErrorAction Stop
-  $did += 'magic packet on, pattern wake off, NIC power-down off'
+    -ErrorAction Stop
+  $did += 'magic packet on, pattern wake off'
 } catch {
   Write-Output "$($ad.Name): $($_.Exception.Message)"
   exit 1
+}
+
+# Undo a previous power-apply (or hand tweak) that unticked the parent - wake cannot be
+# armed while it is off. 'Unsupported' drivers just ignore this.
+if ((Get-NetAdapterPowerManagement -Name $ad.Name -ErrorAction SilentlyContinue).AllowComputerToTurnOffDevice -eq 'Disabled') {
+  Set-NetAdapterPowerManagement -Name $ad.Name -AllowComputerToTurnOffDevice Enabled -ErrorAction SilentlyContinue
+  $did += 're-armed device power-down (required for wake)'
 }
 
 # Some drivers only honour their own advanced keyword; set it too when present.

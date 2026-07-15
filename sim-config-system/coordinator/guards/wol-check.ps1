@@ -1,8 +1,10 @@
 # PASS (exit 0) if the NIC carrying this PC's coordinator-facing IP can be woken by
 # a magic packet - i.e. the "Wake on LAN" action in PC status will actually work:
 #   - Wake on Magic Packet: enabled
-#   - "Allow the computer to turn off this device to save power": unticked
-#     (a powered-down NIC cannot listen for the packet)
+#   - "Allow the computer to turn off this device to save power": NOT unticked.
+#     Counter-intuitive, but Windows treats wake as a sub-option of it: clear the parent
+#     and wake is never armed, which is the classic reason WoL fails from a powered-off
+#     PC. The power guard exempts this NIC for the same reason.
 # NOTE: Windows is only half of it. WoL must also be enabled in the PC's BIOS/UEFI
 # (often "Power On by PCIe/PME"); nothing here can see or set that.
 # Keep in step with wol-apply.ps1.
@@ -22,7 +24,11 @@ if (-not $pm) { Write-Output "$($ad.Name): driver exposes no power management - 
 
 $bad = @()
 if ($pm.WakeOnMagicPacket -ne 'Enabled') { $bad += "Wake on Magic Packet is $($pm.WakeOnMagicPacket)" }
-if ($pm.AllowComputerToTurnOffDevice -eq 'Enabled') { $bad += 'Windows may power the NIC down to save power' }
+# 'Unsupported' is fine (the driver exposes no such knob); only an explicit Disabled is a
+# problem, because then Windows never arms wake on this NIC.
+if ($pm.AllowComputerToTurnOffDevice -eq 'Disabled') {
+  $bad += 'device power-down is unticked, so Windows will not arm wake on this NIC'
+}
 
 if ($bad.Count -eq 0) {
   Write-Output "$($ad.Name) ($($ad.MacAddress)) on $ip - wake on magic packet enabled"
