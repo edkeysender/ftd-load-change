@@ -40,8 +40,9 @@ powercfg /setdcvalueindex SCHEME_CURRENT $SUB_USB $USB_SUSPEND 0 2>$null
 powercfg /setactive SCHEME_CURRENT 2>$null
 $did += 'USB selective suspend: off'
 
-# Untick "allow the computer to turn off this device to save power" everywhere.
-# Not every device exposes this, and some refuse the write - count rather than fail.
+# Untick "allow the computer to turn off this device to save power" on EVERY device
+# that offers it. Not all do, and some refuse the write, so count rather than fail -
+# power-check.ps1 only insists on the network/USB/input ones (see its header).
 $devs = Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable
 $changed = 0; $failed = 0
 foreach ($d in @($devs | Where-Object { $_.Enable })) {
@@ -52,6 +53,12 @@ foreach ($d in @($devs | Where-Object { $_.Enable })) {
   } catch { $failed++ }
 }
 $did += "device power saving: disabled on $changed device(s)$(if ($failed) { ", $failed refused" })"
+
+# NICs get a second pass: some drivers only honour the netadapter API, and a NIC that
+# powers down also kills Wake-on-LAN.
+foreach ($a in @(Get-NetAdapter -Physical | Where-Object { $_.Status -ne 'Not Present' })) {
+  Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -ErrorAction SilentlyContinue
+}
 
 Write-Output ($did -join '; ')
 exit 0
