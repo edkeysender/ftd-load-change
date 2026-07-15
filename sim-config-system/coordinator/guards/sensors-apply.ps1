@@ -7,6 +7,12 @@
 # System.Memory, BlackSharp.Core, DiskInfoToolkit, RAMSPDToolkit-NDD, ...). Installing
 # the main DLL alone fails at load with "Unable to load one or more of the requested
 # types", so unpack the lot. Build it with deploy/fetch-lhm.sh.
+#
+# We do NOT `Expand-Archive -Force` straight over the target: that deletes each existing
+# file first, and a DLL currently loaded by a process (the health probe mid-sample, or a
+# console that ran Add-Type) is a mapped image Windows will not let us delete or rename.
+# Instead unpack to a temp dir and copy only what differs - so re-applying an already
+# installed, identical build is a no-op that cannot fail on a lock.
 $ErrorActionPreference = 'Stop'
 
 $lhmDir = if ($env:SIM_LHM) { $env:SIM_LHM } else { 'C:\sim-agent\lhm' }
@@ -19,15 +25,37 @@ if (-not (Test-Path $zip)) {
   exit 1
 }
 
-New-Item -ItemType Directory -Force -Path $lhmDir | Out-Null
-Expand-Archive -Path $zip -DestinationPath $lhmDir -Force
-# Windows blocks loading DLLs that carry the downloaded-from-internet mark.
-Get-ChildItem -Path $lhmDir -Filter *.dll | Unblock-File
+$tmp = Join-Path $env:TEMP ('lhm-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+try {
+  Expand-Archive -Path $zip -DestinationPath $tmp -Force
+  New-Item -ItemType Directory -Force -Path $lhmDir | Out-Null
 
-$n = @(Get-ChildItem -Path $lhmDir -Filter *.dll).Count
-if (-not (Test-Path (Join-Path $lhmDir 'LibreHardwareMonitorLib.dll'))) {
-  Write-Output "unpacked $n dll(s) to $lhmDir but LibreHardwareMonitorLib.dll is not among them"
+  $copied = 0; $same = 0; $locked = @()
+  foreach ($f in Get-ChildItem -Path $tmp -Filter *.dll) {
+    $dst = Join-Path $lhmDir $f.Name
+    if (Test-Path $dst) {
+      # Same bytes already in place - nothing to do, and no lock can bite us.
+      if ((Get-FileHash $dst).Hash -eq (Get-FileHash $f.FullName).Hash) { $same++; continue }
+    }
+    try { Copy-Item -Path $f.FullName -Destination $dst -Force -ErrorAction Stop; $copied++ }
+    catch { $locked += $f.Name }
+  }
+} finally {
+  Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Windows blocks loading DLLs that carry the downloaded-from-internet mark.
+Get-ChildItem -Path $lhmDir -Filter *.dll | Unblock-File -ErrorAction SilentlyContinue
+
+if ($locked.Count -gt 0) {
+  Write-Output ("in use, could not replace: " + ($locked -join ', ') +
+                " - a process has them loaded. Close any PowerShell window that ran Add-Type on them, or restart the agent, then Apply again.")
   exit 1
 }
-Write-Output "unpacked $n sensor dll(s) to $lhmDir"
+if (-not (Test-Path (Join-Path $lhmDir 'LibreHardwareMonitorLib.dll'))) {
+  Write-Output "unpacked to $lhmDir but LibreHardwareMonitorLib.dll is not among the files"
+  exit 1
+}
+Write-Output "sensor dlls in $lhmDir - $copied installed/updated, $same already current"
 exit 0

@@ -107,9 +107,10 @@ re-runs every check on that PC.
 | Guard | Asserts | Apply |
 | --- | --- | --- |
 | Computer name | name matches `WS-XX-XXX` (X = digit) | — check only, rename needs a reboot |
+| Clock in sync | shows the PC's system time; within 60s of the **coordinator's** clock | ✅ (resync, else set from the coordinator) |
 | Max performance | High/Ultimate plan, no idle timeouts, no hibernation, no device power-down | ✅ |
 | Wake-on-LAN ready | NIC holding the coordinator-facing IP wakes on magic packet | ✅ (BIOS/UEFI wake is still manual) |
-| Windows Update disabled | `NoAutoUpdate` policy + `wuauserv` disabled | ✅ |
+| Windows Update disabled | the `NoAutoUpdate` / no-online-check **policies** (not the service — see below) | ✅ |
 | Notifications disabled | toasts, notification centre, tips, Defender alerts | ✅ |
 | Wallpaper | desktop/lock image is the standard | ✅ |
 | Git / SSH / VC++ | prerequisites present | ✅ |
@@ -117,7 +118,19 @@ re-runs every check on that PC.
 
 A guard may omit `apply` (check-only); the dashboard then shows no Apply button.
 Guard scripts run with `SIM_PC_IP` (this PC's coordinator-facing IP), `SIM_LHM` (sensor
-DLL dir) and, for apply, `SIM_ASSETS` (downloaded assets) in the environment.
+DLL dir), `SIM_COORDINATOR` (its base URL — the time guard reads the coordinator's clock
+from the `Date` header of any response) and, for apply, `SIM_ASSETS` (downloaded assets).
+
+> **A guard must only assert what its Apply can hold.** Two of these were rewritten after
+> failing forever: *Max performance* demanded power-saving off on all 37 devices (Windows
+> enables it by default on nearly all of them, and some refuse the write), and *Windows
+> Update disabled* demanded `wuauserv` stay disabled — the Update Medic Service re-enables
+> it at every boot, so it flipped to fail on each restart. Both now assert the durable
+> subset (network/USB/input devices; the policy keys) and report the rest.
+>
+> Guards must also not contradict each other: *Max performance* exempts the Wake-on-LAN
+> NIC, because Windows treats "allow this device to wake the computer" as a sub-option of
+> "allow the computer to turn off this device", so clearing the parent silently disarms WoL.
 
 > **Guard scripts must be ASCII.** Windows PowerShell 5.1 reads a BOM-less `.ps1` as
 > ANSI, so a UTF-8 `—` decodes to `â€"` — and that last byte is a cp1252 smart quote,

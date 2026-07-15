@@ -1,19 +1,35 @@
-# Disable Windows Update: set the AU policy, then stop and disable wuauserv.
-# Nothing here reboots the PC. Needs admin (HKLM + service control).
-$ErrorActionPreference = 'Stop'
+# Stop Windows Update installing anything on its own: set the policies that survive a
+# reboot, then best-effort stop the service.
+#
+# The policies are the part that holds. Disabling wuauserv is done too, but Windows'
+# Update Medic Service puts it back at the next boot, so winupdate-check.ps1 does not
+# require it - see its header. Needs admin. Does not reboot.
+$ErrorActionPreference = 'SilentlyContinue'
 
 $au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+$wu = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
 New-Item -Path $au -Force | Out-Null
-# 1 = never check for updates. AUOptions is what the (legacy) UI reads; set both so
-# the policy is unambiguous to every consumer.
+
+$did = @()
+# 1 = never check for updates (the "Disabled" setting of Configure Automatic Updates).
 New-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -PropertyType DWord -Force | Out-Null
-New-ItemProperty -Path $au -Name AUOptions -Value 1 -PropertyType DWord -Force | Out-Null
+New-ItemProperty -Path $au -Name AUOptions   -Value 1 -PropertyType DWord -Force | Out-Null
+# Don't contact Microsoft's update servers at all.
+New-ItemProperty -Path $wu -Name DoNotConnectToWindowsUpdateInternetLocations -Value 1 -PropertyType DWord -Force | Out-Null
+# Never let a quality update swap a driver under a running sim.
+New-ItemProperty -Path $wu -Name ExcludeWUDriversInQualityUpdate -Value 1 -PropertyType DWord -Force | Out-Null
+$did += 'policy: no automatic updates, no online update check, no driver updates'
 
-# The policy alone is not enough on Win11 - the Update Orchestrator can still pull
-# updates - so take the service out too.
-Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+# Best effort - Windows restores this at boot, which is why the check ignores it.
+Stop-Service -Name wuauserv -Force
 Set-Service -Name wuauserv -StartupType Disabled
+$svc = (Get-CimInstance Win32_Service -Filter "Name='wuauserv'").StartMode
+$did += "wuauserv stopped (startup=$svc; Windows may re-enable it at boot - the policy is what holds)"
 
-$start = (Get-CimInstance Win32_Service -Filter "Name='wuauserv'").StartMode
-Write-Output "Windows Update disabled: NoAutoUpdate=1, wuauserv startup=$start"
+$edition = (Get-CimInstance Win32_OperatingSystem).Caption
+if ($edition -match 'Home') {
+  Write-Output (($did -join '; ') + "; WARNING: $edition ignores these policies - this PC needs Pro/Enterprise to be protected")
+  exit 1
+}
+Write-Output ($did -join '; ')
 exit 0

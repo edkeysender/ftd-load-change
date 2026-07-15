@@ -57,11 +57,14 @@ func (a *Agent) doGuard(c Command) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script)
 	// SIM_PC_IP is the IP the coordinator knows this PC by — the wol guard uses it to
 	// pick the NIC to configure (a PC may have several). SIM_LHM is where the sensor
-	// DLLs live, shared with the HealthCheck probe.
+	// DLLs live, shared with the HealthCheck probe. SIM_COORDINATOR lets the time guard
+	// measure this PC's clock against the coordinator's, which is the reference every
+	// version, deploy and health sample is stamped against.
 	cmd.Env = append(os.Environ(),
 		"SIM_ASSETS="+assetDir,
 		"SIM_PC_IP="+a.cfg.PCIP,
-		"SIM_LHM="+a.lhmDir())
+		"SIM_LHM="+a.lhmDir(),
+		"SIM_COORDINATOR="+a.cfg.CoordinatorURL)
 	out, runErr := cmd.CombinedOutput()
 	ok := runErr == nil // exit code 0
 	detail := strings.TrimSpace(string(out))

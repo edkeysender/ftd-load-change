@@ -7,6 +7,14 @@
     "check": "pcname-check.ps1"
   },
   {
+    "id": "time",
+    "name": "Clock in sync",
+    "desc": "Shows this PC's system time, and checks it against the coordinator's clock (within 60s) - the reference every version, deploy and health sample is stamped against. Apply resyncs w32time and, failing that, sets the clock from the coordinator.",
+    "assets": [],
+    "check": "time-check.ps1",
+    "apply": "time-apply.ps1"
+  },
+  {
     "id": "winupdate",
     "name": "Windows Update disabled",
     "desc": "No automatic updates: the NoAutoUpdate policy is set and the wuauserv service is disabled. A sim must never reboot or swap a driver mid-session.",
