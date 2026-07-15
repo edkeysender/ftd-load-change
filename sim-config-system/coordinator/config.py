@@ -51,5 +51,10 @@ MASTER = "master"
 # Agent considered offline if no heartbeat within this many seconds.
 HEARTBEAT_TIMEOUT = 30
 
+# HealthCheck: how long temperature history is kept (older samples are pruned on
+# every write) and how often each agent samples its sensors.
+HEALTH_RETENTION_DAYS = int(os.environ.get("SIM_HEALTH_RETENTION_DAYS", "30"))
+HEALTH_SAMPLE_SECONDS = int(os.environ.get("SIM_HEALTH_SAMPLE_SECONDS", "300"))
+
 # Shared bearer token for agent auth (OPEN QUESTION: replace with mTLS if LAN untrusted).
 AGENT_TOKEN = os.environ.get("SIM_AGENT_TOKEN", "change-me")

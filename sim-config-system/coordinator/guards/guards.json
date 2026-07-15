@@ -7,6 +7,38 @@
     "check": "pcname-check.ps1"
   },
   {
+    "id": "winupdate",
+    "name": "Windows Update disabled",
+    "desc": "No automatic updates: the NoAutoUpdate policy is set and the wuauserv service is disabled. A sim must never reboot or swap a driver mid-session.",
+    "assets": [],
+    "check": "winupdate-check.ps1",
+    "apply": "winupdate-apply.ps1"
+  },
+  {
+    "id": "notify",
+    "name": "Notifications disabled",
+    "desc": "No toasts, notification centre, tips or Defender alerts popping over the sim. Registry only, no reboot forced.",
+    "assets": [],
+    "check": "notify-check.ps1",
+    "apply": "notify-apply.ps1"
+  },
+  {
+    "id": "power",
+    "name": "Max performance, never sleeps",
+    "desc": "High/Ultimate performance plan, every idle timeout set to never (sleep, hibernate, monitor, disk), hibernation and USB selective suspend off, and no device allowed to power down to save power.",
+    "assets": [],
+    "check": "power-check.ps1",
+    "apply": "power-apply.ps1"
+  },
+  {
+    "id": "wol",
+    "name": "Wake-on-LAN ready",
+    "desc": "The NIC holding this PC's coordinator-facing IP wakes on a magic packet and is never powered down - what the Wake on LAN action in PC status needs. BIOS/UEFI wake must still be enabled by hand.",
+    "assets": [],
+    "check": "wol-check.ps1",
+    "apply": "wol-apply.ps1"
+  },
+  {
     "id": "wallpaper",
     "name": "Wallpaper and login image",
     "desc": "Desktop + lock-screen image matches the standard.",
@@ -29,6 +61,14 @@
     "assets": [],
     "check": "ssh-check.ps1",
     "apply": "ssh-apply.ps1"
+  },
+  {
+    "id": "sensors",
+    "name": "Hardware sensors (CPU temp)",
+    "desc": "This PC can report a CPU temperature to HealthCheck. Most desktop boards need the LibreHardwareMonitor DLLs — upload them under Assets, then Apply. NVIDIA GPU temps work without this (nvidia-smi).",
+    "assets": ["LibreHardwareMonitorLib.dll", "HidSharp.dll"],
+    "check": "sensors-check.ps1",
+    "apply": "sensors-apply.ps1"
   },
   {
     "id": "vcredist",

@@ -39,6 +39,7 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
   .dot.on { background: #27ae60; } .dot.off { background: #c9c6bd; }
   .ok { color: #1d7a59; } .bad { color: #c0392b; } .muted { color: #908e86; }
+  .warn-txt { color: #99641a; }   /* amber: a HealthCheck temperature that's high but not hot */
   .live-badge { background: #1d7a59; color: #fff; padding: 1px 7px; border-radius: 5px; font-size: 10px; }
   .row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
   #toast { position: fixed; bottom: 18px; right: 18px; background: #2c2c2a; color: #fff;
@@ -64,6 +65,7 @@
   <div style="display:flex;gap:8px;margin-bottom:16px">
     <button id="mtab-loads" onclick="showMainTab('loads')">Loads</button>
     <button class="ghost" id="mtab-config" onclick="showMainTab('config')">Load Configuration</button>
+    <button class="ghost" id="mtab-health" onclick="showMainTab('health')">HealthCheck</button>
     <button class="ghost" id="mtab-seq" onclick="showMainTab('seq')">Sequence Config</button>
   </div>
 
@@ -217,6 +219,26 @@
   </section>
 
   </div><!-- /maintab-config -->
+
+  <div id="maintab-health" style="display:none">
+  <section>
+    <h2>HealthCheck <span class="muted" style="font-size:11px;font-weight:400">(hardware per PC)</span>
+      <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <span class="muted" style="font-size:11px">History</span>
+        <select id="health-range" onchange="setHealthRange(this.value)">
+          <option value="1">last 24 hours</option>
+          <option value="7">last 7 days</option>
+          <option value="30" selected>last 30 days</option>
+        </select>
+      </span>
+    </h2>
+    <div class="hint">Every PC running an agent, with its BIOS and CPU/GPU temperatures.
+      Each agent samples its own sensors every 5 minutes; the coordinator keeps 30 days.
+      A missing temperature means that PC has no source for it — see
+      <b>Load Configuration → Installs → Hardware sensors</b>.</div>
+    <div id="health-list"></div>
+  </section>
+  </div><!-- /maintab-health -->
 
   <div id="maintab-seq" style="display:none">
     <section>
@@ -797,6 +819,134 @@ async function uploadAsset(name, input) {
     refresh();
   } catch (e) { toast('upload failed: ' + e.message, true); }
 }
+// ---- HealthCheck: BIOS + CPU/GPU temperature history -------------------
+// Fetched only while the tab is open (a chart per PC is a lot of points to pull
+// every few seconds), and repainted only on a real change — same reason as the
+// guards list: re-rendering identical HTML makes the charts flicker.
+let HEALTH_RANGE = 30, healthHtml = '', healthTimer = 0;
+const TEMP_LIMITS = { cpu: [70, 85], gpu: [75, 88] };  // [warn, hot] °C
+
+function setHealthRange(v) { HEALTH_RANGE = parseFloat(v) || 30; healthHtml = ''; loadHealth(); }
+
+async function loadHealth() {
+  const el = $('health-list'); if (!el) return;
+  clearTimeout(healthTimer);
+  const d = await safe(api('GET', '/health'));
+  if (!d) { el.innerHTML = '<div class="muted" style="font-size:13px">Coordinator unreachable.</div>'; return; }
+  const pcs = d.pcs || [];
+  if (!pcs.length) {
+    el.innerHTML = '<div class="muted" style="font-size:13px">No agent has reported yet — a PC appears here once its agent heartbeats.</div>';
+  } else {
+    const hist = await Promise.all(pcs.map(p =>
+      safe(api('GET', '/health/history?pc=' + encodeURIComponent(p.pc_ip) + '&days=' + HEALTH_RANGE))));
+    const html = pcs.map((p, i) => healthCard(p, hist[i])).join('');
+    if (html !== healthHtml) { healthHtml = html; el.innerHTML = html; }
+  }
+  // Agents sample every 5 min; polling once a minute keeps "now" honest without churn.
+  if ($('maintab-health').style.display !== 'none') healthTimer = setTimeout(loadHealth, 60000);
+}
+
+const tempCls = (v, kind) => {
+  if (v == null) return 'muted';
+  const [warn, hot] = TEMP_LIMITS[kind];
+  return v >= hot ? 'bad' : (v >= warn ? 'warn-txt' : 'ok');
+};
+function tempTxt(v, kind, src) {
+  if (v == null) return '<span class="muted" style="font-size:12px">no reading</span>';
+  const srcTag = src ? ` <span class="muted" style="font-size:10px">via ${esc(src)}</span>` : '';
+  return `<b class="${tempCls(v, kind)}" style="font-size:15px">${v.toFixed(1)} °C</b>${srcTag}`;
+}
+
+function healthCard(p, h) {
+  const name = p.host || p.pc_ip;
+  const dot = p.online ? '<span class="ok">●</span>' : '<span class="muted">○</span>';
+  const st = (h && h.stats) || {};
+  const range = HEALTH_RANGE == 1 ? '24h' : HEALTH_RANGE + 'd';
+  const minmax = (k) => st[k + '_max'] == null ? ''
+    : `<span class="muted" style="font-size:11px">${range} min ${st[k + '_min'].toFixed(0)} · avg ${st[k + '_avg'].toFixed(0)} · max ${st[k + '_max'].toFixed(0)} °C</span>`;
+  const row = (label, val) => `<div style="display:flex;gap:8px;padding:1px 0"><span class="muted" style="font-size:11px;min-width:78px">${label}</span><span style="font-size:12px">${val}</span></div>`;
+  const bios = p.bios_version
+    ? esc(p.bios_version) + (p.bios_date ? ` <span class="muted" style="font-size:11px">(${esc(p.bios_date)})</span>` : '') +
+      (p.bios_vendor ? `<br><span class="muted" style="font-size:11px">${esc(p.bios_vendor)}</span>` : '')
+    : '<span class="muted">not reported yet</span>';
+  const note = p.note ? `<div class="hint" style="margin:6px 0 0;color:#99641a">${esc(p.note)}</div>` : '';
+  const stale = p.temp_at && (Date.now() / 1000 - p.temp_at) > 900
+    ? ` <span class="muted" style="font-size:10px">(${ago(p.temp_at)})</span>` : '';
+  return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px 12px;margin-bottom:10px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      ${dot} <b>${esc(name)}</b>
+      <span class="muted" style="font-size:11px">${esc(p.pc_ip)}${p.folder ? ' · ' + esc(p.folder) : ''}</span>
+      <span class="muted" style="margin-left:auto;font-size:11px">agent ${esc(p.agent_version || '?')}</span>
+    </div>
+    <div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="min-width:230px">
+        ${row('BIOS', bios)}
+        ${row('CPU', esc(p.cpu_name || '—'))}
+        ${row('GPU', esc(p.gpu_name || '—'))}
+      </div>
+      <div style="min-width:170px">
+        <div class="muted" style="font-size:11px">CPU temperature${stale}</div>
+        <div>${tempTxt(p.cpu_c, 'cpu', p.cpu_src)}</div>
+        <div>${minmax('cpu')}</div>
+      </div>
+      <div style="min-width:170px">
+        <div class="muted" style="font-size:11px">GPU temperature${stale}</div>
+        <div>${tempTxt(p.gpu_c, 'gpu', p.gpu_src)}</div>
+        <div>${minmax('gpu')}</div>
+      </div>
+    </div>
+    ${healthChart(h)}${note}
+  </div>`;
+}
+
+// Inline SVG line chart — two series (CPU/GPU), average drawn solid with the
+// bucket's max behind it faintly, so a short spike isn't averaged away.
+function healthChart(h) {
+  const pts = (h && h.points) || [];
+  const vals = [];
+  pts.forEach(p => ['cpu_avg', 'cpu_max', 'gpu_avg', 'gpu_max'].forEach(k => { if (p[k] != null) vals.push(p[k]); }));
+  if (!vals.length) return '<div class="muted" style="font-size:11px;padding:6px 0">No temperature history for this range yet.</div>';
+  const W = 900, H = 132, L = 30, R = 6, T = 8, B = 18;
+  const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
+  let lo = Math.floor((Math.min(...vals) - 3) / 10) * 10, hi = Math.ceil((Math.max(...vals) + 3) / 10) * 10;
+  if (hi - lo < 20) hi = lo + 20;
+  const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R);
+  const y = v => (H - B) - ((v - lo) / (hi - lo)) * (H - B - T);
+  const bucket = (h && h.bucket) || 300;
+  // Break the line across gaps (PC powered off) instead of drawing through them.
+  const path = key => {
+    let d = '', prev = null;
+    pts.forEach(p => {
+      const v = p[key];
+      if (v == null) { prev = null; return; }
+      d += ((prev == null || p.t - prev > bucket * 3) ? 'M' : 'L') + x(p.t).toFixed(1) + ' ' + y(v).toFixed(1) + ' ';
+      prev = p.t;
+    });
+    return d.trim();
+  };
+  let grid = '';
+  for (let i = 0; i <= 2; i++) {
+    const v = lo + (hi - lo) * i / 2, yy = y(v).toFixed(1);
+    grid += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="#ece9e0"/>` +
+            `<text x="${L - 4}" y="${(+yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#8a8578">${v.toFixed(0)}</text>`;
+  }
+  const when = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const series = (key, color) =>
+    `<path d="${path(key + '_max')}" fill="none" stroke="${color}" stroke-width="1" opacity="0.28"/>` +
+    `<path d="${path(key + '_avg')}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+  // Uniform scaling (no preserveAspectRatio="none") — stretching the viewBox to a
+  // fixed height would squash the axis labels along with the lines.
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+    ${grid}
+    ${series('cpu', '#c0392b')}
+    ${series('gpu', '#2c6fbb')}
+    <text x="${L}" y="${H - 5}" font-size="9" fill="#8a8578">${when(t0)}</text>
+    <text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="9" fill="#8a8578">${when(t1)}</text>
+    <text x="${W / 2 - 30}" y="${H - 5}" font-size="9" fill="#c0392b">— CPU</text>
+    <text x="${W / 2 + 12}" y="${H - 5}" font-size="9" fill="#2c6fbb">— GPU</text>
+  </svg>`;
+}
+
 function closeDriftModal() { $('drift-modal').style.display = 'none'; }
 function showAgentError(ip) {
   const msg = AGENT_ERRORS[ip] || 'No error detail reported yet — check again after the next heartbeat.';
@@ -983,11 +1133,14 @@ let nextDevTag = '';   // next dev-v1.x label, computed from /dev/versions
 function showMainTab(t) {
   $('maintab-loads').style.display = t === 'loads' ? '' : 'none';
   $('maintab-config').style.display = t === 'config' ? 'flex' : 'none';
+  $('maintab-health').style.display = t === 'health' ? '' : 'none';
   $('maintab-seq').style.display = t === 'seq' ? '' : 'none';
   $('mtab-loads').className = t === 'loads' ? '' : 'ghost';
   $('mtab-config').className = t === 'config' ? '' : 'ghost';
+  $('mtab-health').className = t === 'health' ? '' : 'ghost';
   $('mtab-seq').className = t === 'seq' ? '' : 'ghost';
   localStorage.setItem('simMainTab', t);  // remember across refresh
+  if (t === 'health') loadHealth();  // charts are fetched per PC — only when looked at
 }
 const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
 

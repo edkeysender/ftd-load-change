@@ -121,6 +121,15 @@ func (c *Client) Heartbeat(hb Heartbeat) {
 	}
 }
 
+// PostHealth uploads one HealthCheck sample. Best-effort like the heartbeat: a lost
+// sample is a gap in a 30-day chart, not something worth failing the agent over.
+func (c *Client) PostHealth(ip string, s *HealthSample) {
+	resp, err := c.do("POST", "/agents/"+ip+"/health", s)
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
 // PollCommand long-polls for the next command (nil if none pending).
 func (c *Client) PollCommand() (*Command, error) {
 	return c.fetchCommand("/agents/" + c.pcIP + "/commands")

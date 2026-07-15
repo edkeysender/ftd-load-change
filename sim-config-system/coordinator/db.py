@@ -71,6 +71,25 @@ CREATE TABLE IF NOT EXISTS discovered_hosts (
     first_seen REAL,
     last_seen  REAL
 );
+CREATE TABLE IF NOT EXISTS pc_health (
+    pc_ip        TEXT PRIMARY KEY,    -- static inventory, refreshed on every sample
+    bios_vendor  TEXT,
+    bios_version TEXT,
+    bios_date    TEXT,                -- yyyy-mm-dd
+    cpu_name     TEXT,
+    gpu_name     TEXT,
+    cpu_src      TEXT,                -- wmi | lhm | NULL (nothing could read it)
+    gpu_src      TEXT,                -- nvidia-smi | lhm | NULL
+    note         TEXT,                -- why a temp is missing, shown in HealthCheck
+    at           REAL
+);
+CREATE TABLE IF NOT EXISTS health_samples (
+    pc_ip TEXT,                       -- temperature history; pruned to HEALTH_RETENTION_DAYS
+    at    REAL,
+    cpu_c REAL,
+    gpu_c REAL
+);
+CREATE INDEX IF NOT EXISTS health_samples_pc_at ON health_samples (pc_ip, at);
 INSERT OR IGNORE INTO dev_session (id, holder, started_at) VALUES (1, NULL, NULL);
 """
 
@@ -330,3 +349,71 @@ def set_listed(ip, listed, note=None):
 def list_discovered():
     with conn() as c:
         return [dict(r) for r in c.execute("SELECT * FROM discovered_hosts ORDER BY ip")]
+
+
+# --- health: BIOS inventory + temperature history -----------------------
+_HEALTH_KEYS = ("bios_vendor", "bios_version", "bios_date", "cpu_name",
+                "gpu_name", "cpu_src", "gpu_src", "note")
+
+
+def record_health(pc_ip, s):
+    """Store one health sample from an agent: refresh the PC's static inventory and
+    append the temperatures (only if it read at least one), then prune history past
+    the retention window. `s` is the agent's probe JSON."""
+    now = time.time()
+    vals = [s.get(k) for k in _HEALTH_KEYS]
+    with conn() as c:
+        c.execute(
+            f"""INSERT INTO pc_health (pc_ip, {', '.join(_HEALTH_KEYS)}, at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(pc_ip) DO UPDATE SET
+                  {', '.join(f'{k}=excluded.{k}' for k in _HEALTH_KEYS)}, at=excluded.at""",
+            (pc_ip, *vals, now),
+        )
+        cpu, gpu = s.get("cpu_c"), s.get("gpu_c")
+        if cpu is not None or gpu is not None:
+            c.execute("INSERT INTO health_samples (pc_ip, at, cpu_c, gpu_c) VALUES (?,?,?,?)",
+                      (pc_ip, now, cpu, gpu))
+        c.execute("DELETE FROM health_samples WHERE at < ?",
+                  (now - config.HEALTH_RETENTION_DAYS * 86400,))
+
+
+def health_static():
+    """Static inventory per PC (BIOS, chip names, which source answers): {pc_ip: row}."""
+    with conn() as c:
+        return {r["pc_ip"]: dict(r) for r in c.execute("SELECT * FROM pc_health")}
+
+
+def health_latest():
+    """Most recent temperature sample per PC: {pc_ip: {at, cpu_c, gpu_c}}."""
+    with conn() as c:
+        rows = c.execute(
+            """SELECT h.pc_ip, h.at, h.cpu_c, h.gpu_c FROM health_samples h
+               JOIN (SELECT pc_ip, MAX(at) AS at FROM health_samples GROUP BY pc_ip) m
+                 ON m.pc_ip = h.pc_ip AND m.at = h.at""")
+        return {r["pc_ip"]: dict(r) for r in rows}
+
+
+def health_stats(pc_ip, since):
+    """Min/avg/max per chip since `since` — the headline numbers above each chart."""
+    with conn() as c:
+        r = c.execute(
+            """SELECT COUNT(*) n,
+                      MIN(cpu_c) cpu_min, AVG(cpu_c) cpu_avg, MAX(cpu_c) cpu_max,
+                      MIN(gpu_c) gpu_min, AVG(gpu_c) gpu_avg, MAX(gpu_c) gpu_max
+               FROM health_samples WHERE pc_ip=? AND at >= ?""", (pc_ip, since)).fetchone()
+        return dict(r) if r else {}
+
+
+def health_history(pc_ip, since, bucket):
+    """Temperature history bucketed into `bucket`-second slots (a 30-day span is
+    thousands of samples — bucketing keeps the chart payload small). Each point
+    carries the average AND the max, so a short spike still shows up."""
+    with conn() as c:
+        rows = c.execute(
+            """SELECT CAST(at / ? AS INTEGER) * ? AS t,
+                      AVG(cpu_c) cpu_avg, MAX(cpu_c) cpu_max,
+                      AVG(gpu_c) gpu_avg, MAX(gpu_c) gpu_max
+               FROM health_samples WHERE pc_ip=? AND at >= ?
+               GROUP BY t ORDER BY t""", (bucket, bucket, pc_ip, since))
+        return [dict(r) for r in rows]

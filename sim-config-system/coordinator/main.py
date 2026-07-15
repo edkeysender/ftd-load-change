@@ -804,6 +804,49 @@ def rollback(req: RollbackReq):
     return {"training_live": req.tag}
 
 
+# ---- healthcheck: BIOS inventory + temperature history ----------------
+@app.get("/health")
+def health():
+    """One row per PC that has an agent: identity + BIOS + the latest temperatures.
+    PCs the agent has never sampled appear with nulls (e.g. an agent too old to
+    report health), so the tab shows them rather than silently dropping them."""
+    static, latest = db.health_static(), db.health_latest()
+    now = time.time()
+    pcs = []
+    for a in db.list_agents():
+        ip = a["pc_ip"]
+        st = static.get(ip, {})
+        last = latest.get(ip, {})
+        pcs.append({
+            "pc_ip": ip, "folder": a.get("folder"), "host": a.get("host"),
+            "online": a.get("online"), "mode": a.get("mode"),
+            "agent_version": a.get("version"), "last_seen": a.get("last_seen"),
+            "bios_vendor": st.get("bios_vendor"), "bios_version": st.get("bios_version"),
+            "bios_date": st.get("bios_date"),
+            "cpu_name": st.get("cpu_name"), "gpu_name": st.get("gpu_name"),
+            "cpu_src": st.get("cpu_src"), "gpu_src": st.get("gpu_src"),
+            "note": st.get("note"), "sampled_at": st.get("at"),
+            "cpu_c": last.get("cpu_c"), "gpu_c": last.get("gpu_c"),
+            "temp_at": last.get("at"),
+            "stats_24h": db.health_stats(ip, now - 86400),
+        })
+    pcs.sort(key=lambda p: p["pc_ip"])
+    return {"pcs": pcs, "retention_days": config.HEALTH_RETENTION_DAYS,
+            "sample_seconds": config.HEALTH_SAMPLE_SECONDS}
+
+
+@app.get("/health/history")
+def health_history(pc: str, days: float = 30):
+    """Bucketed temperature history for one PC. Bucket size scales with the span so
+    a chart never gets more points than it can draw (~720)."""
+    days = max(0.04, min(float(days), config.HEALTH_RETENTION_DAYS))
+    since = time.time() - days * 86400
+    bucket = max(config.HEALTH_SAMPLE_SECONDS, int(days * 86400 / 720))
+    return {"pc": pc, "days": days, "bucket": bucket,
+            "points": db.health_history(pc, since, bucket),
+            "stats": db.health_stats(pc, since)}
+
+
 # ===================== agent-facing endpoints ===========================
 class Heartbeat(BaseModel):
     pc_ip: str
@@ -827,6 +870,15 @@ def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None
     if dp and dp.get("state") == "syncing" and hb.mode == "ERROR":
         _deploy_progress[hb.pc_ip] = {"state": "fail", "at": time.time(),
                                       "error": hb.error}  # deploy failed
+    return {"ok": True}
+
+
+@app.post("/agents/{pc_ip}/health")
+def health_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    """A health sample from the agent's probe (BIOS + CPU/GPU temps). Sent on its own
+    timer, not on a command, so history keeps building with nobody watching."""
+    _auth(authorization)
+    db.record_health(pc_ip, payload)
     return {"ok": True}
 
 

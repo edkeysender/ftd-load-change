@@ -102,6 +102,10 @@ func (a *Agent) Run() {
 		}
 	}()
 
+	// HealthCheck sampling is independent of the state machine — a PC's temperature
+	// history should keep building whether or not a load is deployed here.
+	go a.runHealthLoop()
+
 	log.Printf("agent %s (%s) v%s started in state %s", a.cfg.PCIP, a.cfg.Folder, Version, a.state)
 
 	// FIRST: if the operator clicked "update", self-update + relaunch BEFORE any

@@ -22,7 +22,8 @@ coordinator/            # FastAPI: SQLite state + git wrapper + REST API (Pi)
   guards/               # per-PC compliance guard scripts (*-check/*-apply .ps1) + guards.json
 agent/                  # Go Windows agent: poll loop + state machine (each PC)
   main.go config.go client.go handlers.go deploy.go fsops.go capture.go browse.go
-  guard.go install.go update.go agent.example.json go.mod
+  guard.go install.go update.go power.go state.go health.go
+  agent.example.json go.mod
 deploy/                 # setup/build scripts: pi-setup, forgejo-setup, build-agent,
                         #   prepare-git-bundle, fetch-vcredist, discover, AGENT.md
 ```
@@ -71,7 +72,7 @@ path is trusted.
 ## Web UI
 
 Open `http://<pi-ip>:8090/` for the dashboard (served by the coordinator, single page,
-no build step), organised into three top tabs:
+no build step), organised into four top tabs:
 
 - **Loads** — PC status grid (online / mode `TRAINING`\|`TESTING` / running version /
   clean-vs-dirty, with a per-PC *diff* of drifted files, plus a per-PC **actions**
@@ -89,10 +90,47 @@ no build step), organised into three top tabs:
   edits from each PC → commits → creates a new `dev-v1.x` → deploys it (two-phase progress
   modal, ending in a link to the new load in **Loads**). The per-PC stepper (Save → Import →
   snapshot) is still available for building a load from scratch. Also **Installs** (per-PC
-  compliance guards — computer name, wallpaper, Git, SSH, VC++ — with check/Apply and asset
-  upload; each PC shows its Windows name next to its IP) and **Global ignore**.
+  compliance guards, see below) and **Global ignore**.
+- **HealthCheck** — every PC running an agent, with its BIOS (vendor / version / release
+  date) and CPU/GPU temperatures, plus a 30-day history chart per PC (24h / 7d / 30d).
+  Each agent samples its own sensors every 5 min and posts them; the coordinator keeps
+  `HEALTH_RETENTION_DAYS` (30) and prunes older samples on every write.
 - **Sequence Config** — in-browser block builder for the sim startup/shutdown
   `sequenceConfig.json` (import / edit / download; error-code catalogue).
+
+### Installs (guards)
+
+Per-PC compliance items, each a PowerShell check (+ usually an apply) in `coordinator/guards/`,
+listed in `guards.json`. Each online PC shows its Windows name next to its IP, and ↻ Recheck
+re-runs every check on that PC.
+
+| Guard | Asserts | Apply |
+| --- | --- | --- |
+| Computer name | name matches `WS-XX-XXX` (X = digit) | — check only, rename needs a reboot |
+| Max performance | High/Ultimate plan, no idle timeouts, no hibernation, no device power-down | ✅ |
+| Wake-on-LAN ready | NIC holding the coordinator-facing IP wakes on magic packet | ✅ (BIOS/UEFI wake is still manual) |
+| Windows Update disabled | `NoAutoUpdate` policy + `wuauserv` disabled | ✅ |
+| Notifications disabled | toasts, notification centre, tips, Defender alerts | ✅ |
+| Wallpaper | desktop/lock image is the standard | ✅ |
+| Git / SSH / VC++ | prerequisites present | ✅ |
+| Hardware sensors | a CPU temperature is readable (for HealthCheck) | ✅ (needs the LHM DLLs uploaded) |
+
+A guard may omit `apply` (check-only); the dashboard then shows no Apply button.
+Guard scripts run with `SIM_PC_IP` (this PC's coordinator-facing IP), `SIM_LHM` (sensor
+DLL dir) and, for apply, `SIM_ASSETS` (downloaded assets) in the environment.
+
+> **Guard scripts must be ASCII.** Windows PowerShell 5.1 reads a BOM-less `.ps1` as
+> ANSI, so a UTF-8 `—` decodes to `â€"` — and that last byte is a cp1252 smart quote,
+> which PowerShell accepts as a *string terminator*. Use `-`, not `—`.
+
+**CPU/GPU temperatures.** Windows has no dependable built-in CPU temp source, so
+`health-probe.ps1` tries in order: ACPI thermal zone via WMI (absent on most desktop
+boards) → LibreHardwareMonitor. GPU: `nvidia-smi` (any NVIDIA driver) → LibreHardwareMonitor
+(covers AMD/Intel). To enable the fallback, upload `LibreHardwareMonitorLib.dll` +
+`HidSharp.dll` under **Installs → Assets**, then **Apply** the *Hardware sensors* guard —
+it copies them next to the agent (`C:\sim-agent\lhm`) and unblocks them. LHM reads sensors
+through a kernel driver, so the agent must run **as administrator** or temps come back
+empty. A PC with no source reports `no reading` plus the reason — it never invents a value.
 
 Enter your name (top-right) — it's recorded as the author of seals, promotes and dev builds.
 
@@ -125,12 +163,15 @@ Operator: `GET /pcs`, `GET /versions`, `GET /dev/versions`, `GET /dev/readiness`
 `POST /import/{pc}/size-report`, `POST /seal-baseline`, `POST /deploy`,
 `POST /dev/snapshot`, `DELETE /dev/versions/{tag}`, `GET /diff`,
 `POST /promote` (+ `GET /promote/status`), `POST /rollback`.
+HealthCheck: `GET /health` (per-PC BIOS + latest temps + 24h stats),
+`GET /health/history?pc=&days=` (bucketed series; bucket scales with the span).
 Guards / installs / global ignore: `GET /guards`, `POST /guard/check|apply|check-all`,
 `GET /installs`, `POST /install`, `PUT|GET /installs/asset/{name}`, `GET|PUT /global-ignore`.
 Agent-facing: `GET /whoami`, `POST /agents/{ip}/heartbeat`, `GET /agents/{ip}/commands`,
 `GET /agents/{ip}/enforce`, `GET /agents/{ip}/browse|drift|filediff`,
 `POST /agents/{ip}/{import|size-report|capture|deploy|drift|filediff|guard|install}-result`,
-`POST /agents/{ip}/update|forget|shutdown|wake`, `GET /agent/binary`.
+`POST /agents/{ip}/update|forget|shutdown|wake`, `POST /agents/{ip}/health`,
+`GET /agent/binary`.
 Wake-on-LAN uses the PC's last-known MAC (reported on every heartbeat); force
 shutdown is queued for the agent (`shutdown /s /f /t 0`). The heartbeat also
 carries the PC's Windows name, shown next to its IP under **Installs** and
