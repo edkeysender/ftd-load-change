@@ -100,23 +100,29 @@ def init():
             c.execute("ALTER TABLE agents ADD COLUMN mac TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Migration for the agents.host column (Windows computer name).
+        try:
+            c.execute("ALTER TABLE agents ADD COLUMN host TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 # --- agents -------------------------------------------------------------
-def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None, mac=None):
-    # version + mac are COALESCE'd so callers that don't know them (deploy-result)
+def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None, mac=None, host=None):
+    # version + mac + host are COALESCE'd so callers that don't know them (deploy-result)
     # don't wipe the last-known values.
     with conn() as c:
         c.execute(
-            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version, mac)
-               VALUES (?,?,?,?,?,?,?,?)
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version, mac, host)
+               VALUES (?,?,?,?,?,?,?,?,?)
                ON CONFLICT(pc_ip) DO UPDATE SET
                  folder=excluded.folder, mode=excluded.mode,
                  current_ref=excluded.current_ref, clean=excluded.clean,
                  last_seen=excluded.last_seen,
                  version=COALESCE(excluded.version, agents.version),
-                 mac=COALESCE(excluded.mac, agents.mac)""",
-            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version, mac),
+                 mac=COALESCE(excluded.mac, agents.mac),
+                 host=COALESCE(excluded.host, agents.host)""",
+            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version, mac, host),
         )
         # A detected agent un-hides a PC that was manually removed from PC status.
         c.execute("DELETE FROM dismissed_pcs WHERE pc_ip=?", (pc_ip,))

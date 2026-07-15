@@ -697,12 +697,20 @@ async function driftPc(ip) {
     showDriftModal(ip, d.entries || []);
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
+// Repaint only on a real change: refresh() runs every few seconds and re-rendering
+// identical HTML would reload the asset <img>s (visible blink) and reset the file inputs.
+let guardsHtml = '', assetVer = 0;  // assetVer: cache-buster, bumped only by an upload
+function paintGuards(el, html) {
+  if (html === guardsHtml) return;
+  guardsHtml = html;
+  el.innerHTML = html;
+}
 function renderGuards(data, agents) {
   const el = $('guards-list'); if (!el) return;
   const guards = (data && data.guards) || [];
   const results = (data && data.results) || {};
   if (!guards.length) {
-    el.innerHTML = '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>';
+    paintGuards(el, '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>');
     return;
   }
   // Assets (wallpaper image, git bundle, …): preview, upload, or replace.
@@ -713,7 +721,8 @@ function renderGuards(data, agents) {
   });
   const assetRows = Object.entries(assetMap).map(([name, info]) => {
     const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
-    const url = '/installs/asset/' + encodeURIComponent(name) + '?t=' + Date.now();
+    // Stable URL so the browser reuses the cached image; only an upload busts it.
+    const url = '/installs/asset/' + encodeURIComponent(name) + (assetVer ? '?v=' + assetVer : '');
     let thumb;
     if (info.missing) thumb = '<span class="bad" style="font-size:11px">missing</span>';
     else if (isImg) thumb = `<img src="${url}" onclick="enlargeImg('${esc(url)}')" style="height:38px;border:1px solid #ccc;border-radius:4px;cursor:zoom-in;vertical-align:middle">`;
@@ -729,9 +738,9 @@ function renderGuards(data, agents) {
          <div class="hint" style="margin:0 0 4px">Assets — click an image to enlarge; Replace to change it.</div>${assetRows}</div>`
     : '';
   const online = Object.values(agents || {}).filter(a => a.online);
-  if (!online.length) { el.innerHTML = missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'; return; }
+  if (!online.length) { paintGuards(el, missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'); return; }
   // Checks run on the agent at launch and on the Recheck button — not auto from here.
-  el.innerHTML = missHdr + online.map(a => {
+  paintGuards(el, missHdr + online.map(a => {
     const ip = a.pc_ip, r = results[ip] || {};
     const rows = guards.map(g => {
       const st = r[g.id];
@@ -740,8 +749,11 @@ function renderGuards(data, agents) {
       else if (st.pass === true) { box = '☑'; cls = 'ok'; txt = 'pass'; }
       else if (st.pass === false) { box = '☒'; cls = 'bad'; txt = 'fail'; }
       else { box = '⏳'; cls = 'muted'; txt = st.detail || 'applying…'; }
-      const canApply = !st || st.pass !== true;
-      const applyBtn = canApply ? `<button class="ghost" style="padding:1px 8px;font-size:11px" onclick="applyGuard('${esc(ip)}','${esc(g.id)}')">Apply</button>` : '';
+      // No apply script = check-only guard (e.g. the PC name — rename it by hand).
+      const canApply = !!g.apply && (!st || st.pass !== true);
+      const applyBtn = canApply
+        ? `<button class="ghost" style="padding:1px 8px;font-size:11px" onclick="applyGuard('${esc(ip)}','${esc(g.id)}')">Apply</button>`
+        : (!g.apply && st && st.pass === false ? '<span class="muted" style="font-size:11px">fix by hand</span>' : '');
       const tip = st && st.detail ? ' title="' + esc(st.detail) + '"' : '';
       return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"${tip}>
         <span class="${cls}" style="font-size:15px;width:18px">${box}</span>
@@ -749,12 +761,18 @@ function renderGuards(data, agents) {
         <span class="${cls}" style="font-size:11px;min-width:60px">${esc(txt)}</span>
         ${applyBtn}</div>`;
     }).join('');
+    const host = a.host || '';
+    // Name next to the IP; red when it breaks the WS-XX-XXX standard (see the pcname guard).
+    const nameCls = host && !/^WS-\d{2}-\d{3}$/.test(host) ? 'bad' : 'muted';
+    const nameTag = host
+      ? ` <span class="${nameCls}" style="font-size:12px" title="Windows computer name">${esc(host)}</span>`
+      : '';
     return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <b>Computer ${esc(ip)}</b> <span class="muted" style="font-size:11px">${esc((agents[ip]||{}).folder||'')}</span>
+        <b>Computer ${esc(ip)}</b>${nameTag} <span class="muted" style="font-size:11px">${esc((agents[ip]||{}).folder||'')}</span>
         <button class="ghost" style="margin-left:auto;padding:1px 8px;font-size:11px" onclick="recheckGuards('${esc(ip)}')">↻ Recheck</button>
       </div>${rows}</div>`;
-  }).join('');
+  }).join(''));
 }
 function applyGuard(ip, id) {
   act(() => api('POST', '/guard/apply', { pc: ip, id }), 'Applying ' + id + ' on ' + ip + '…');
@@ -775,6 +793,7 @@ async function uploadAsset(name, input) {
     const r = await fetch('/installs/asset/' + encodeURIComponent(name), { method: 'PUT', body: f });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     toast(name + ' uploaded ✓');
+    assetVer = Date.now();  // new URL -> the preview reloads (only) now
     refresh();
   } catch (e) { toast('upload failed: ' + e.message, true); }
 }

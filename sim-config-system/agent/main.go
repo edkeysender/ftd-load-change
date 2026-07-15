@@ -197,8 +197,20 @@ func (a *Agent) heartbeat() {
 	a.api.Heartbeat(Heartbeat{
 		PCIP: a.cfg.PCIP, Folder: a.cfg.Folder,
 		Mode: string(st), CurrentRef: ref, Clean: clean, Version: Version, Error: errMsg,
-		MAC: localMAC(a.cfg.PCIP),
+		MAC: localMAC(a.cfg.PCIP), Host: localHost(),
 	})
+}
+
+var (
+	hostOnce sync.Once
+	hostStr  string
+)
+
+// localHost is this PC's Windows computer name, reported on every heartbeat so the
+// dashboard can show it next to the IP. Cached — it can't change without a reboot.
+func localHost() string {
+	hostOnce.Do(func() { hostStr, _ = os.Hostname() })
+	return hostStr
 }
 
 // setState / remember keep the shared fields consistent under the lock. Leaving the

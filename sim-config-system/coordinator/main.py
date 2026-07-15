@@ -443,8 +443,12 @@ def _load_guards():
 
 
 def _guard_cmd(item, kind):
-    """Build a guard command: which script to run + (for apply) the assets to fetch."""
-    script = item["check"] if kind == "check" else item["apply"]
+    """Build a guard command: which script to run + (for apply) the assets to fetch.
+    A guard may omit `apply` (check-only, e.g. the PC-name standard — renaming is a
+    manual, reboot-requiring act); asking to apply one is a 400."""
+    script = item.get(kind)
+    if not script:
+        raise HTTPException(400, f"guard '{item['id']}' has no {kind} script")
     assets = [] if kind == "check" else [
         {"name": a, "url": f"/guards/file/{a}"} for a in item.get("assets", [])]
     return {"type": "guard", "guard_id": item["id"], "guard_kind": kind,
@@ -515,8 +519,9 @@ def guard_apply(req: GuardReq):
     item = next((x for x in _load_guards() if x["id"] == req.id), None)
     if not item:
         raise HTTPException(404, "unknown guard")
+    cmd = _guard_cmd(item, "apply")  # 400s before we mark it "applying…"
     _guard_results.setdefault(req.pc, {})[req.id] = {"pass": None, "detail": "applying…", "at": time.time()}
-    manifest.enqueue(req.pc, _guard_cmd(item, "apply"))
+    manifest.enqueue(req.pc, cmd)
     return {"queued": True}
 
 
@@ -809,12 +814,14 @@ class Heartbeat(BaseModel):
     version: str | None = None
     error: str | None = None
     mac: str | None = None
+    host: str | None = None
 
 
 @app.post("/agents/{pc_ip}/heartbeat")
 def heartbeat(pc_ip: str, hb: Heartbeat, authorization: str | None = Header(None)):
     _auth(authorization)
-    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version, hb.mac)
+    db.upsert_agent(hb.pc_ip, hb.folder, hb.mode, hb.current_ref, hb.clean, hb.version,
+                    hb.mac, hb.host)
     _agent_errors[hb.pc_ip] = hb.error if (hb.mode == "ERROR" and hb.error) else None
     dp = _deploy_progress.get(hb.pc_ip)
     if dp and dp.get("state") == "syncing" and hb.mode == "ERROR":

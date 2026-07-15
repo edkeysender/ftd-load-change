@@ -1,5 +1,12 @@
 [
   {
+    "id": "pcname",
+    "name": "Computer name (WS-XX-XXX)",
+    "desc": "PC name follows the standard WS-XX-XXX, X = a digit (e.g. WS-01-002). Check only — rename by hand, it needs a reboot.",
+    "assets": [],
+    "check": "pcname-check.ps1"
+  },
+  {
     "id": "wallpaper",
     "name": "Wallpaper and login image",
     "desc": "Desktop + lock-screen image matches the standard.",
