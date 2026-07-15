@@ -38,6 +38,32 @@ cd C:\sim-agent
 .\simagent.exe
 ```
 
+### Running it elevated (needed for CPU temperatures)
+
+Double-clicking or running it from a normal shell leaves the agent **unelevated**, and
+HealthCheck's CPU temperature stays empty: LibreHardwareMonitor reads MSRs through a
+kernel driver that only loads with an admin token. (Everything else — deploy, import,
+guards, GPU temps via nvidia-smi — works fine unelevated.)
+
+Install it as a scheduled task that starts at logon with highest privileges. Run this
+**once per PC, from an elevated PowerShell**:
+
+```powershell
+$exe = 'C:\sim-agent\simagent.exe'
+$me  = "$env:USERDOMAIN\$env:USERNAME"
+Register-ScheduledTask -TaskName 'sim-agent' -Force `
+  -Action    (New-ScheduledTaskAction -Execute $exe) `
+  -Trigger   (New-ScheduledTaskTrigger -AtLogOn -User $me) `
+  -Principal (New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest) `
+  -Settings  (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0)
+Stop-Process -Name simagent -Force -ErrorAction SilentlyContinue
+Start-ScheduledTask -TaskName 'sim-agent'
+```
+
+It runs as the logged-in user (who must be a local admin), **not** as SYSTEM — deliberate:
+the notifications guard and other per-user settings write the console user's registry
+hive, which a SYSTEM-run agent would miss.
+
 It logs `agent ... started in state UNSEEDED` and heartbeats every 10s. Confirm
 it shows up online on the Pi:
 

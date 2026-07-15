@@ -126,11 +126,23 @@ DLL dir) and, for apply, `SIM_ASSETS` (downloaded assets) in the environment.
 **CPU/GPU temperatures.** Windows has no dependable built-in CPU temp source, so
 `health-probe.ps1` tries in order: ACPI thermal zone via WMI (absent on most desktop
 boards) → LibreHardwareMonitor. GPU: `nvidia-smi` (any NVIDIA driver) → LibreHardwareMonitor
-(covers AMD/Intel). To enable the fallback, upload `LibreHardwareMonitorLib.dll` +
-`HidSharp.dll` under **Installs → Assets**, then **Apply** the *Hardware sensors* guard —
-it copies them next to the agent (`C:\sim-agent\lhm`) and unblocks them. LHM reads sensors
-through a kernel driver, so the agent must run **as administrator** or temps come back
-empty. A PC with no source reports `no reading` plus the reason — it never invents a value.
+(covers AMD/Intel). A PC with no source reports `no reading` **plus the reason** — it never
+invents a value.
+
+To enable the LHM fallback, run `sudo bash deploy/fetch-lhm.sh` on the Pi (pi-setup.sh
+already does) to build `installs/lhm.zip`, then **Apply** the *Hardware sensors* guard —
+it unpacks the DLLs next to the agent (`C:\sim-agent\lhm`) and unblocks them.
+`lhm.zip` carries **all** of the upstream root DLLs, not just `LibreHardwareMonitorLib.dll`:
+it references `HidSharp`, `System.Memory`, `BlackSharp.Core`, `DiskInfoToolkit`,
+`RAMSPDToolkit-NDD` and `System.Runtime.CompilerServices.Unsafe`, and a missing one fails
+at load with the unhelpful *"Unable to load one or more of the requested types"*.
+
+Three things must ALL be true for a CPU temperature, and the guard names whichever is missing:
+1. `lhm.zip` installed on the PC (the *Hardware sensors* guard's Apply);
+2. the **agent running elevated** — LHM reads MSRs through a kernel driver. Install it as a
+   scheduled task with *Run with highest privileges* (see `deploy/AGENT.md`);
+3. **Memory Integrity (Core Isolation) OFF** — it blocks LHM's driver via the
+   vulnerable-driver blocklist, and sensors then read `null` on every value.
 
 Enter your name (top-right) — it's recorded as the author of seals, promotes and dev builds.
 

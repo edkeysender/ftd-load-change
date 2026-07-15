@@ -65,8 +65,8 @@
   {
     "id": "sensors",
     "name": "Hardware sensors (CPU temp)",
-    "desc": "This PC can report a CPU temperature to HealthCheck. Most desktop boards need the LibreHardwareMonitor DLLs — upload them under Assets, then Apply. NVIDIA GPU temps work without this (nvidia-smi).",
-    "assets": ["LibreHardwareMonitorLib.dll", "HidSharp.dll"],
+    "desc": "This PC can report a CPU temperature to HealthCheck. Most desktop boards need LibreHardwareMonitor: build lhm.zip with deploy/fetch-lhm.sh (or upload it under Assets), then Apply. It also needs the agent running elevated, and Memory Integrity (Core Isolation) off. NVIDIA GPU temps need none of this (nvidia-smi).",
+    "assets": ["lhm.zip"],
     "check": "sensors-check.ps1",
     "apply": "sensors-apply.ps1"
   },
