@@ -1,8 +1,7 @@
 # PASS (exit 0) if this PC is set to full performance and can never nod off:
 #   - active power plan is High performance (or Ultimate)
 #   - sleep / hibernate / monitor / disk idle timeouts are all 0 (= never), AC and DC
-#   - no NETWORK, USB or INPUT device may be powered down to save power, EXCEPT the
-#     Wake-on-LAN NIC (see the exemption below - the wol guard needs it left armed)
+#   - no NETWORK, USB or INPUT device may be powered down to save power
 # Keep in step with power-apply.ps1.
 #
 # Why only those device classes: Windows ships with power management ON for nearly
@@ -59,28 +58,15 @@ foreach ($s in @(@{N='sleep'; S=$SUB_SLEEP; G=$STANDBY}, @{N='hibernate'; S=$SUB
 $cls = @{}; $nm = @{}
 Get-CimInstance Win32_PnPEntity | ForEach-Object { $cls[$_.DeviceID] = $_.PNPClass; $nm[$_.DeviceID] = $_.Name }
 
-# The Wake-on-LAN NIC is EXEMPT. Windows models "allow this device to wake the computer"
-# as a sub-option of "allow the computer to turn off this device to save power" - clear
-# the parent and wake stops being armed, which kills the Wake on LAN action in PC status.
-# Leaving it set costs nothing here: every idle timeout is 0, so an awake PC never powers
-# the NIC down anyway. Without this exemption the power and wol guards contradict each
-# other on the same device and one of them can never pass.
-# Match on PnPDeviceID, not the friendly name: names are NOT unique (a PC can carry two
-# "Realtek ... Family Controller" or "Microsoft Wi-Fi Direct Virtual Adapter" entries),
-# so name matching could exempt the wrong NIC.
-$wolId = $null; $wolDesc = $null
-if ($env:SIM_PC_IP) {
-  $ifx = (Get-NetIPAddress -IPAddress $env:SIM_PC_IP -ErrorAction SilentlyContinue).InterfaceIndex
-  if ($ifx) {
-    $ad = Get-NetAdapter -InterfaceIndex $ifx -ErrorAction SilentlyContinue
-    $wolId = $ad.PnPDeviceID; $wolDesc = $ad.InterfaceDescription
-  }
-}
+# The Wake-on-LAN NIC is NOT exempt. The old Device Manager UI greys out the wake options
+# when "allow the computer to turn off this device" is unchecked, which suggests wake
+# needs it - but that was tested on a real sim PC (Realtek PCIe 2.5GbE) by actually waking
+# the machine: WoL works fine with it unticked. So we hold every NIC to the same rule and
+# the wol guard does not assert this setting at all.
 
 # Enable = $true means "allow the computer to turn off this device to save power".
 $still = @(Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable |
-           Where-Object { $_.Enable -and $cls[($_.InstanceName -replace '_\d+$','')] -in $SIM_CLASSES -and
-                          ($null -eq $wolId -or ($_.InstanceName -replace '_\d+$','') -ne $wolId) })
+           Where-Object { $_.Enable -and $cls[($_.InstanceName -replace '_\d+$','')] -in $SIM_CLASSES })
 if ($still.Count -gt 0) {
   # Name the devices, not their class - "USB, USB, USB" tells nobody what to go fix.
   $names = ($still | Select-Object -First 3 | ForEach-Object {
@@ -91,8 +77,7 @@ if ($still.Count -gt 0) {
 }
 
 if ($bad.Count -eq 0) {
-  $exempt = if ($wolDesc) { " ($wolDesc exempt: it must stay armed for Wake-on-LAN)" } else { '' }
-  Write-Output "max performance: plan OK, no idle timeouts, no network/USB/input device powers down$exempt"
+  Write-Output 'max performance: plan OK, no idle timeouts, no network/USB/input device powers down'
   exit 0
 }
 Write-Output ($bad -join '; ')

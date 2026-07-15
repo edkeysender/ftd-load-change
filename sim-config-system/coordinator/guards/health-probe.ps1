@@ -93,9 +93,14 @@ if (($null -eq $out.cpu_c) -or ($null -eq $out.gpu_c)) {
         $best = $null
         foreach ($s in $hw.Sensors) {
           if ($s.SensorType -ne $tempType -or $null -eq $s.Value) { continue }
+          $v = [double]$s.Value
+          # LHM reports 0 for temperature sensors its driver could not actually poll.
+          # A CPU/GPU at 0 C is not a reading - treat implausible values as absent rather
+          # than publishing a number that looks real on the dashboard.
+          if ($v -lt 5 -or $v -gt 150) { continue }
           $preferred = if ($kind -eq 'Cpu') { $s.Name -match 'Package' } else { $s.Name -match 'Core' }
-          if ($preferred) { $best = [double]$s.Value; break }
-          if ($null -eq $best -or [double]$s.Value -gt $best) { $best = [double]$s.Value }
+          if ($preferred) { $best = $v; break }
+          if ($null -eq $best -or $v -gt $best) { $best = $v }
         }
         if ($null -eq $best) { continue }
         $best = [math]::Round($best, 1)

@@ -40,34 +40,21 @@ powercfg /setdcvalueindex SCHEME_CURRENT $SUB_USB $USB_SUSPEND 0 2>$null
 powercfg /setactive SCHEME_CURRENT 2>$null
 $did += 'USB selective suspend: off'
 
-# The Wake-on-LAN NIC is EXEMPT - clearing "allow the computer to turn off this device"
-# also stops Windows arming wake on it, which kills the Wake on LAN action in PC status.
-# It costs nothing to leave: with every idle timeout at 0 an awake PC never powers it
-# down. power-check.ps1 exempts the same device; keep the two in step.
-# Match on PnPDeviceID, not the friendly name - names are not unique on a PC, and
-# exempting the wrong NIC would leave the real one able to power down.
-$wolId = $null
-if ($env:SIM_PC_IP) {
-  $ifx = (Get-NetIPAddress -IPAddress $env:SIM_PC_IP -ErrorAction SilentlyContinue).InterfaceIndex
-  if ($ifx) { $wolId = (Get-NetAdapter -InterfaceIndex $ifx -ErrorAction SilentlyContinue).PnPDeviceID }
-}
-
-# Untick "allow the computer to turn off this device to save power" on every other device
-# that offers it. Not all do, and some refuse the write, so count rather than fail -
-# power-check.ps1 only insists on the network/USB/input ones (see its header).
+# Untick "allow the computer to turn off this device to save power" on every device that
+# offers it - including the Wake-on-LAN NIC: waking a real sim PC with this unticked
+# proved wake still works, so there is nothing to exempt. Not all devices expose the
+# setting and some refuse the write, so count rather than fail - power-check.ps1 only
+# insists on the network/USB/input ones (see its header).
 $devs = Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable
-$changed = 0; $failed = 0; $skipped = 0
+$changed = 0; $failed = 0
 foreach ($d in @($devs | Where-Object { $_.Enable })) {
-  if ($wolId -and ($d.InstanceName -replace '_\d+$','') -eq $wolId) { $skipped++; continue }
   try {
     $d.Enable = $false
     Set-CimInstance -InputObject $d -ErrorAction Stop
     $changed++
   } catch { $failed++ }
 }
-$did += "device power saving: disabled on $changed device(s)" +
-        $(if ($failed) { ", $failed refused" }) +
-        $(if ($skipped) { ", left the Wake-on-LAN NIC armed" })
+$did += "device power saving: disabled on $changed device(s)$(if ($failed) { ", $failed refused" })"
 
 Write-Output ($did -join '; ')
 exit 0
