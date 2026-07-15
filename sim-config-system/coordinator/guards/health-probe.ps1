@@ -19,6 +19,20 @@ $out = [ordered]@{
   note = $null
 }
 
+# Why LHM enumerated sensors but every value was null. Its driver needs both admin
+# and permission to load; on Win11 the usual blocker is Memory Integrity (Core
+# Isolation), which rejects WinRing0.sys via the vulnerable-driver blocklist.
+function Get-NoSensorReason {
+  $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $admin) { return 'the agent is not running as administrator (the sensor driver needs it).' }
+  $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard
+  if ($dg -and $dg.SecurityServicesRunning -contains 2) {
+    return 'Memory Integrity (Core Isolation) is ON and blocks the sensor driver. Turn it off in Windows Security > Device security > Core isolation, then reboot.'
+  }
+  return 'its sensor driver could not load on this PC.'
+}
+
 # ---- static inventory -------------------------------------------------
 $b = Get-CimInstance Win32_BIOS
 if ($b) {
@@ -95,9 +109,10 @@ if (($null -eq $out.cpu_c) -or ($null -eq $out.gpu_c)) {
       }
       $comp.Close()
       if ($null -eq $out.cpu_c) {
-        # LHM loaded but read nothing: almost always missing admin (its kernel
-        # driver can't load), occasionally an unsupported chipset.
-        $out.note = 'LibreHardwareMonitor read no CPU temperature - the agent likely is not running as administrator (its sensor driver needs it).'
+        # LHM loaded and enumerated sensors but every value came back null: its kernel
+        # driver (WinRing0, needed for MSR access) did not load. Name the actual reason
+        # - guessing "not admin" sends people down the wrong path.
+        $out.note = 'LibreHardwareMonitor read no CPU temperature: ' + (Get-NoSensorReason)
       }
     } catch {
       $out.note = "LibreHardwareMonitor failed: $($_.Exception.Message)"

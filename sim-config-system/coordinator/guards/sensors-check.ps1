@@ -35,7 +35,17 @@ try {
   }
   $comp.Close()
   if ($null -ne $val) { Write-Output "CPU temp readable via LibreHardwareMonitor ($val C)"; exit 0 }
-  Write-Output 'LibreHardwareMonitor loaded but read no CPU temperature - the agent is probably not running as administrator (its sensor driver needs it)'
+  # Sensors enumerated but every value null = the driver did not load. Say why.
+  $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+           ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard
+  if (-not $admin) {
+    Write-Output 'LibreHardwareMonitor loaded but read nothing: the agent is not running as administrator (its sensor driver needs it)'
+  } elseif ($dg -and $dg.SecurityServicesRunning -contains 2) {
+    Write-Output 'LibreHardwareMonitor loaded but read nothing: Memory Integrity (Core Isolation) is ON and blocks its sensor driver - turn it off in Windows Security > Device security > Core isolation, then reboot'
+  } else {
+    Write-Output 'LibreHardwareMonitor loaded but read nothing: its sensor driver could not load on this PC'
+  }
   exit 1
 } catch {
   Write-Output "LibreHardwareMonitor failed to load: $($_.Exception.Message)"

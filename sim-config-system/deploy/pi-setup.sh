@@ -35,11 +35,16 @@ echo ""
 
 echo "[1/5] Installing packages..."
 apt update
-apt install -y python3 python3-venv python3-pip git git-lfs
+apt install -y python3 python3-venv python3-pip git git-lfs unzip curl
 git lfs install --system 2>/dev/null || git lfs install || true   # enable LFS filters
 
 echo "[2/5] Creating data dir + venv..."
 mkdir -p "$DATA_DIR/work"
+# Sensor DLLs for the `sensors` guard / HealthCheck temperatures. Fetched rather than
+# vendored (third-party binaries stay out of git); non-fatal, as it needs the internet
+# and everything else works without it - re-run deploy/fetch-lhm.sh later.
+SIM_INSTALLS_DIR="$DATA_DIR/installs" bash "$SCRIPT_DIR/fetch-lhm.sh" \
+    || echo "  (LibreHardwareMonitor fetch failed - run deploy/fetch-lhm.sh later for CPU temps)"
 if [ ! -d "$REPO_DIR/.venv" ]; then
     python3 -m venv "$REPO_DIR/.venv"
 fi
