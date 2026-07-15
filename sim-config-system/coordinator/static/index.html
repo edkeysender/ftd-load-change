@@ -747,10 +747,12 @@ function renderGuards(data, agents) {
     const url = '/installs/asset/' + encodeURIComponent(name) + (assetVer ? '?v=' + assetVer : '');
     let thumb;
     if (info.missing) thumb = '<span class="bad" style="font-size:11px">missing</span>';
-    else if (isImg) thumb = `<img src="${url}" onclick="enlargeImg('${esc(url)}')" style="height:38px;border:1px solid #ccc;border-radius:4px;cursor:zoom-in;vertical-align:middle">`;
+    // Bound BOTH axes: a 16:9 wallpaper scaled to height alone overflows the cell
+    // and paints over the filename. Crop to fit; click to see the whole image.
+    else if (isImg) thumb = `<img src="${url}" onclick="enlargeImg('${esc(url)}')" style="height:38px;width:46px;object-fit:cover;border:1px solid #ccc;border-radius:4px;cursor:zoom-in;vertical-align:middle">`;
     else thumb = '<span class="ok" style="font-size:11px">present</span>';
     return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0">
-      <span style="width:46px;text-align:center">${thumb}</span>
+      <span style="width:46px;flex-shrink:0;text-align:center">${thumb}</span>
       <b>${esc(name)}</b> <span class="muted" style="font-size:11px">(${esc(info.guard)})</span>
       <label style="margin-left:auto;font-size:11px">${info.missing ? 'Upload' : 'Replace'} <input type="file" style="font-size:11px" onchange="uploadAsset('${esc(name)}',this)"></label>
     </div>`;
