@@ -49,11 +49,35 @@
   #toast.err { background: #c0392b; }
   code { background: #f1efe8; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
   .hint { font-size: 12px; color: #908e86; margin: -6px 0 12px; }
+  header .logo { width: 30px; height: 30px; border-radius: 8px; background: #000; color: #fff;
+                 display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; }
+  /* Fleet summary tiles */
+  .stats { display: flex; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .stat { flex: 1 1 130px; background: #fff; border-radius: 12px; padding: 14px 18px;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+  .stat .n { font-size: 27px; font-weight: 700; line-height: 1.1; }
+  .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: #908e86; margin-top: 2px; }
+  .stat.issues .n { color: #c0392b; }
+  .stat.issues.none .n { color: #1d7a59; }
+  /* Fleet expandable rows */
+  tr.fleet-row { cursor: pointer; }
+  tr.fleet-row:hover td { background: #faf9f5; }
+  tr.fleet-row td { vertical-align: middle; }
+  .chev { display: inline-block; transition: transform .15s; color: #908e86; font-size: 11px; }
+  .chev.open { transform: rotate(90deg); }
+  tr.fleet-detail > td { background: #faf9f5; padding: 0; border-bottom: 1px solid #ece9e0; }
+  .fleet-detail-inner { display: flex; gap: 26px; flex-wrap: wrap; padding: 16px 14px; }
+  .fleet-detail-inner > div { min-width: 0; }
+  .kv { display: flex; gap: 8px; padding: 1px 0; }
+  .kv .k { font-size: 11px; color: #908e86; min-width: 42px; }
+  .kv .v { font-size: 12px; }
+  .temptile { border: 1px solid #ece9e0; border-radius: 8px; padding: 8px 12px; min-width: 150px; background: #fff; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Sim Config Coordinator</h1>
+  <span class="logo">F</span>
+  <h1>Fleet Coordinator</h1>
   <span class="grow"></span>
   <label style="font-size:12px">you: <input id="user" placeholder="your name" size="10"></label>
   <a id="forgejo" href="#" target="_blank" style="display:none">Forgejo ↗</a>
@@ -62,22 +86,40 @@
 
 <div class="wrap">
 
-  <div style="display:flex;gap:8px;margin-bottom:16px">
-    <button id="mtab-loads" onclick="showMainTab('loads')">Loads</button>
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <button id="mtab-fleet" onclick="showMainTab('fleet')">Fleet</button>
+    <button class="ghost" id="mtab-loads" onclick="showMainTab('loads')">Loads</button>
     <button class="ghost" id="mtab-config" onclick="showMainTab('config')">Load Configuration</button>
-    <button class="ghost" id="mtab-health" onclick="showMainTab('health')">HealthCheck</button>
+    <button class="ghost" id="mtab-installs" onclick="showMainTab('installs')">Installs</button>
     <button class="ghost" id="mtab-seq" onclick="showMainTab('seq')">Sequence Config</button>
   </div>
 
-  <div id="maintab-loads">
-
-  <section>
-    <h2>PC status <button class="ghost" style="margin-left:auto" onclick="updateAllAgents()">Update all agents</button></h2>
+  <div id="maintab-fleet">
+  <div style="margin-bottom:4px;display:flex;align-items:flex-start">
+    <div>
+      <h2 style="font-size:20px;text-transform:none;letter-spacing:0;color:#2c2c2a;margin:0 0 2px">Fleet</h2>
+      <div class="hint" style="margin:0 0 14px">Every PC that runs an agent — its deploy status, hardware health, and configuration compliance in one place.</div>
+    </div>
+    <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <span class="muted" style="font-size:11px">History</span>
+      <select id="fleet-range" onchange="setFleetRange(this.value)">
+        <option value="1">24 hours</option>
+        <option value="7">7 days</option>
+        <option value="30" selected>30 days</option>
+      </select>
+      <button class="ghost" onclick="updateAllAgents()">Update all agents</button>
+    </span>
+  </div>
+  <div id="fleet-stats" class="stats"></div>
+  <section style="padding:0;overflow:hidden">
     <table>
-      <thead><tr><th>PC</th><th>Role</th><th>Online</th><th>Mode</th><th>Ref</th><th>State</th><th>Last seen</th><th>Agent</th></tr></thead>
-      <tbody id="grid"></tbody>
+      <thead><tr><th style="padding-left:20px">PC</th><th>Mode</th><th>Ref</th><th>State</th><th>Last seen</th><th>Agent</th></tr></thead>
+      <tbody id="fleet-body"></tbody>
     </table>
   </section>
+  </div><!-- /maintab-fleet -->
+
+  <div id="maintab-loads" style="display:none">
 
   <section>
     <h2>Training Loads <span class="muted" style="font-size:11px;font-weight:400">(customer)</span>
@@ -201,12 +243,6 @@
     </div>
   </section>
 
-  <section style="order:4">
-    <h2>Installs <span class="muted" style="font-size:11px;font-weight:400">(prerequisites &amp; guards)</span></h2>
-    <div class="hint">Keep each PC's config intact — a checklist per computer. <span class="ok">✓</span> = compliant, <span class="bad">✗</span> = not. Click <b>Apply</b> to fix. Add more items with a check/apply script pair in the coordinator's <code>guards/</code> dir.</div>
-    <div id="guards-list"></div>
-  </section>
-
   <section style="order:5">
     <h2>Global ignore <span class="muted" style="font-size:11px;font-weight:400">(all PCs, all loads)</span></h2>
     <div class="hint">Glob patterns ignored everywhere — never synced, deployed, or flagged as drift (e.g. logs, temp). A YAML list, one <code>- "pattern"</code> per line. <code>**</code> = any depth, <code>*</code> = within a name.</div>
@@ -220,25 +256,13 @@
 
   </div><!-- /maintab-config -->
 
-  <div id="maintab-health" style="display:none">
+  <div id="maintab-installs" style="display:none">
   <section>
-    <h2>HealthCheck <span class="muted" style="font-size:11px;font-weight:400">(hardware per PC)</span>
-      <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
-        <span class="muted" style="font-size:11px">History</span>
-        <select id="health-range" onchange="setHealthRange(this.value)">
-          <option value="1">last 24 hours</option>
-          <option value="7">last 7 days</option>
-          <option value="30" selected>last 30 days</option>
-        </select>
-      </span>
-    </h2>
-    <div class="hint">Every PC running an agent, with its BIOS and CPU/GPU temperatures.
-      Each agent samples its own sensors every 5 minutes; the coordinator keeps 30 days.
-      A missing temperature means that PC has no source for it — see
-      <b>Load Configuration → Installs → Hardware sensors</b>.</div>
-    <div id="health-list"></div>
+    <h2>Installs <span class="muted" style="font-size:11px;font-weight:400">(prerequisites &amp; guards)</span></h2>
+    <div class="hint">Shared assets pushed to every PC. Per-PC compliance checks (✓/✗ with Apply) live under each computer in <b>Fleet</b>. Add items with a check/apply script pair in the coordinator's <code>guards/</code> dir.</div>
+    <div id="installs-assets"></div>
   </section>
-  </div><!-- /maintab-health -->
+  </div><!-- /maintab-installs -->
 
   <div id="maintab-seq" style="display:none">
     <section>
@@ -341,6 +365,9 @@ let DEPLOYPROG = {};  // per-PC sync state for the current deploy
 let LAST_READY = null, LAST_PROG = {};  // last dev-stepper inputs, for on-demand re-render
 const importStarting = new Set();  // PCs where Import was clicked but upload hasn't begun
 let AGENT_ERRORS = {};  // pc_ip -> last agent error message (for the ERROR pill)
+let LAST_AGENTS = {};   // pc_ip -> agent, from the last refresh (for on-demand Fleet re-render)
+let GUARDS = { guards: [], results: {} };  // /guards: definitions + per-PC check results
+let HEALTH = {};        // pc_ip -> /health row (BIOS + latest temps + 24h stats)
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -350,12 +377,15 @@ let excludedPaths = new Set();   // full paths (under a pick) to ignore = not sy
 const safe = async p => { try { return await p; } catch (e) { return null; } };
 
 async function refresh() {
-  const [pcs, vers, boot, mpcs, cfg, devvers, devready, insts] = await Promise.all([
+  const [pcs, vers, boot, mpcs, cfg, devvers, devready, insts, health] = await Promise.all([
     safe(api('GET', '/pcs')), safe(api('GET', '/versions')), safe(api('GET', '/bootstrap')),
     safe(api('GET', '/manifest/pcs')), safe(api('GET', '/config')), safe(api('GET', '/dev/versions')),
-    safe(api('GET', '/dev/readiness')), safe(api('GET', '/guards')),
+    safe(api('GET', '/dev/readiness')), safe(api('GET', '/guards')), safe(api('GET', '/health')),
   ]);
   const agents = {}; ((pcs && pcs.agents) || []).forEach(a => agents[a.pc_ip] = a);
+  LAST_AGENTS = agents;
+  GUARDS = insts || { guards: [], results: {} };
+  HEALTH = {}; ((health && health.pcs) || []).forEach(p => HEALTH[p.pc_ip] = p);
   AGENT_ERRORS = {}; ((pcs && pcs.agents) || []).forEach(a => { if (a.error) AGENT_ERRORS[a.pc_ip] = a.error; });
   DISMISSED = (pcs && pcs.dismissed) || [];
   DEPLOYPROG = (pcs && pcs.deploy_progress) || {};
@@ -371,13 +401,13 @@ async function refresh() {
   }
   if (mpcs) {
     MANIFEST = mpcs.pcs;
-    renderGrid(MANIFEST, agents);
     if (boot) renderBootstrap(MANIFEST, boot);
   }
+  renderFleet(MANIFEST, agents);
   LAST_READY = devready; LAST_PROG = (boot && boot.progress) || {};
   renderDevStepper(LAST_READY, LAST_PROG);
   renderDeployProgress(DEPLOYPROG, agents);
-  renderGuards(insts, agents);
+  renderInstalls(GUARDS);
   if (cfg && cfg.forgejo_url) { FORGEJO = cfg.forgejo_url; const f = $('forgejo'); f.href = cfg.forgejo_url; f.style.display = ''; }
   if (vers) renderVersions(vers);
   if (devvers) renderDevVersions(devvers);
@@ -385,47 +415,166 @@ async function refresh() {
   $('clock').textContent = (mpcs ? 'updated ' : 'partial ') + new Date().toLocaleTimeString();
 }
 
-function renderGrid(pcs, agents) {
-  // Show every manifest PC AND every computer that has an agent (even if not yet
-  // in the manifest), so any agent shows up here by default. PCs manually removed
-  // from PC status (dismissed) are hidden until their agent heartbeats again.
-  const dismissed = new Set(DISMISSED);
-  const seen = new Set();
-  const rows = [];
-  pcs.forEach(p => { if (!dismissed.has(p.ip)) { rows.push(p); seen.add(p.ip); } });
-  Object.values(agents).forEach(a => {
-    if (a.pc_ip && !seen.has(a.pc_ip) && !dismissed.has(a.pc_ip)) { rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip); }
+// ---- Fleet: one expandable row per PC (status + hardware + config checks) ----
+let FLEET_OPEN = new Set();   // pc_ip currently expanded
+let FLEET_RANGE = 30;         // temperature-chart span, days
+let fleetHist = {};           // pc_ip -> /health/history result (fetched on expand)
+let fleetHtml = '';           // repaint only on change, so open charts don't flicker
+
+// The PC set: every manifest PC + every computer with an agent, minus dismissed ones —
+// same rule the old PC status grid used.
+function fleetRows(pcs, agents) {
+  const dismissed = new Set(DISMISSED), seen = new Set(), rows = [];
+  (pcs || []).forEach(p => { if (!dismissed.has(p.ip)) { rows.push(p); seen.add(p.ip); } });
+  Object.values(agents || {}).forEach(a => {
+    if (a.pc_ip && !seen.has(a.pc_ip) && !dismissed.has(a.pc_ip)) {
+      rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip);
+    }
   });
-  $('grid').innerHTML = rows.map(p => {
+  return rows;
+}
+
+function setFleetRange(v) {
+  FLEET_RANGE = parseFloat(v) || 30;
+  fleetHist = {};
+  FLEET_OPEN.forEach(fetchFleetHist);
+  renderFleet(MANIFEST, LAST_AGENTS);
+}
+function toggleFleet(ip) {
+  if (FLEET_OPEN.has(ip)) FLEET_OPEN.delete(ip);
+  else { FLEET_OPEN.add(ip); if (!fleetHist[ip]) fetchFleetHist(ip); }
+  renderFleet(MANIFEST, LAST_AGENTS);
+}
+async function fetchFleetHist(ip) {
+  fleetHist[ip] = await safe(api('GET', '/health/history?pc=' + encodeURIComponent(ip) + '&days=' + FLEET_RANGE)) || { points: [] };
+  if (FLEET_OPEN.has(ip)) { fleetHtml = ''; renderFleet(MANIFEST, LAST_AGENTS); }
+}
+
+function renderFleet(pcs, agents) {
+  const body = $('fleet-body'); if (!body) return;
+  agents = agents || {};
+  const rows = fleetRows(pcs, agents);
+  const guardCount = (GUARDS.guards || []).length;
+
+  // Summary tiles.
+  let online = 0, seeded = 0, unseeded = 0, issues = 0;
+  rows.forEach(p => {
     const a = agents[p.ip] || {};
-    // A deployed agent reports mode TRAINING + ref "training-live" whatever the load.
-    // Show the real running version and label it TRAINING vs TESTING by its kind.
-    const deployed = a.mode === 'TRAINING';
-    const mode = deployed ? (LIVE.kind || 'TRAINING') : (a.mode || 'UNSEEDED');
-    const ref = deployed && LIVE.tag ? LIVE.tag : (a.current_ref || '—');
-    const clean = deployed
-      ? (a.clean ? '<span class="ok">clean</span>'
-                 : '<span class="bad">dirty</span> <button class="ghost" style="padding:1px 6px;font-size:10px" onclick="driftPc(\'' + esc(p.ip) + '\')">diff</button>')
-      : '';
-    return `<tr>
-      <td><b>${esc(p.ip)}</b><br><span class="muted">${esc(p.folder||'')}</span></td>
-      <td>${esc(p.role||'')}</td>
-      <td><span class="dot ${a.online?'on':'off'}"></span>${a.online?'online':'offline'}</td>
-      <td>${(a.mode === 'ERROR' && a.error)
-        ? `<span class="pill error" style="cursor:pointer" title="Click to see the error" onclick="showAgentError('${esc(p.ip)}')">ERROR ⚠</span>`
-        : `<span class="pill ${mode.toLowerCase()}">${esc(mode)}</span>`}</td>
-      <td>${esc(ref)}</td>
-      <td>${clean}</td>
-      <td class="muted">${ago(a.last_seen)}</td>
-      <td><span class="muted" style="font-size:11px">${esc(a.version||'—')}</span>
-          <select onchange="pcAction('${esc(p.ip)}',this)" style="font-size:11px;padding:2px 4px;border:1px solid #d3d1c7;border-radius:6px;background:#fff;cursor:pointer">
-            <option value="">⋯ actions</option>
-            <option value="update">Update agent</option>
-            <option value="wake">Wake on LAN</option>
-            <option value="shutdown">Force shut down</option>
-            <option value="remove">Remove from list</option>
-          </select></td></tr>`;
-  }).join('') || '<tr><td colspan="8" class="muted">No PCs in manifest.</td></tr>';
+    if (a.online) online++;
+    if (!a.mode || a.mode === 'UNSEEDED') unseeded++; else seeded++;
+    const res = (GUARDS.results || {})[p.ip] || {};
+    if (Object.values(res).some(s => s && s.pass === false)) issues++;
+  });
+  const tile = (n, l, cls) => `<div class="stat ${cls || ''}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
+  $('fleet-stats').innerHTML =
+    tile(rows.length, 'PCs') + tile(online, 'Online') + tile(seeded, 'Seeded') +
+    tile(unseeded, 'Unseeded') + tile(issues, 'Config issues', 'issues' + (issues ? '' : ' none'));
+
+  const html = rows.map(p => fleetRow(p, agents[p.ip] || {}, guardCount)).join('')
+    || '<tr><td colspan="6" class="muted" style="padding-left:20px">No PCs yet — a PC appears once its agent checks in.</td></tr>';
+  if (html !== fleetHtml) { fleetHtml = html; body.innerHTML = html; }
+}
+
+function fleetRow(p, a, guardCount) {
+  const ip = p.ip, open = FLEET_OPEN.has(ip), h = HEALTH[ip] || {};
+  // A deployed agent reports mode TRAINING + ref "training-live" whatever the load;
+  // resolve to the real running version and label TRAINING vs TESTING by its kind.
+  const deployed = a.mode === 'TRAINING';
+  const mode = deployed ? (LIVE.kind || 'TRAINING') : (a.mode || 'UNSEEDED');
+  const ref = deployed && LIVE.tag ? LIVE.tag : (a.current_ref || '—');
+  const state = deployed
+    ? (a.clean ? '<span class="ok">clean</span>'
+               : '<span class="bad">dirty</span> <button class="ghost" style="padding:1px 6px;font-size:10px" onclick="event.stopPropagation();driftPc(\'' + esc(ip) + '\')">diff</button>')
+    : '';
+  const host = p.host || h.host || '';
+  const nameCls = host && !/^WS-\d{2}-\d{3}$/.test(host) ? 'bad' : 'muted';
+  const name = host ? `<b>${esc(host)}</b> <span class="muted" style="font-size:11px">${esc(ip)}</span>`
+                    : `<b>${esc(ip)}</b>`;
+  const sub = p.folder || h.folder || '';
+  const modeCell = (a.mode === 'ERROR' && a.error)
+    ? `<span class="pill error" style="cursor:pointer" title="Click to see the error" onclick="event.stopPropagation();showAgentError('${esc(ip)}')">ERROR ⚠</span>`
+    : `<span class="pill ${mode.toLowerCase()}">${esc(mode)}</span>`;
+  const summary = `<tr class="fleet-row" onclick="toggleFleet('${esc(ip)}')">
+    <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name}
+      ${sub ? `<br><span class="muted" style="font-size:11px;margin-left:15px">${esc(sub)}</span>` : ''}
+      ${host && nameCls === 'bad' ? '<br><span class="bad" style="font-size:10px;margin-left:15px">name not WS-XX-XXX</span>' : ''}</td>
+    <td>${modeCell}</td>
+    <td>${esc(ref)}</td>
+    <td>${state}</td>
+    <td class="muted">${ago(a.last_seen)}</td>
+    <td><span class="muted" style="font-size:11px">${esc(a.version || '—')}</span>
+      <select onclick="event.stopPropagation()" onchange="pcAction('${esc(ip)}',this)" style="font-size:11px;padding:2px 4px;border:1px solid #d3d1c7;border-radius:6px;background:#fff;cursor:pointer">
+        <option value="">⋯ actions</option>
+        <option value="update">Update agent</option>
+        <option value="wake">Wake on LAN</option>
+        <option value="shutdown">Force shut down</option>
+        <option value="remove">Remove from list</option>
+      </select>
+      <span class="chev ${open ? 'open' : ''}">▶</span></td>
+  </tr>`;
+  if (!open) return summary;
+  return summary + `<tr class="fleet-detail"><td colspan="6"><div class="fleet-detail-inner">
+    <div style="flex:1 1 340px">${fleetHardware(h, fleetHist[ip])}</div>
+    <div style="flex:1 1 300px">${fleetChecks(ip, guardCount)}</div>
+  </div></td></tr>`;
+}
+
+// Hardware & temperature panel for the expanded row.
+function fleetHardware(p, hist) {
+  const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  const bios = p.bios_version
+    ? esc(p.bios_version) + (p.bios_date ? ` <span class="muted">(${esc(p.bios_date)})</span>` : '') +
+      (p.bios_vendor ? ` <span class="muted">${esc(p.bios_vendor)}</span>` : '')
+    : '<span class="muted">not reported yet</span>';
+  const st = p.stats_24h || {};
+  const stale = p.temp_at && (Date.now() / 1000 - p.temp_at) > 900 ? ` <span class="muted" style="font-size:10px">(${ago(p.temp_at)})</span>` : '';
+  const range = FLEET_RANGE == 1 ? '24h' : FLEET_RANGE + 'd';
+  const hs = (hist && hist.stats) || st;
+  const minmax = k => hs[k + '_max'] == null ? ''
+    : `<div class="muted" style="font-size:11px">${range} min ${hs[k + '_min'].toFixed(0)} · avg ${hs[k + '_avg'].toFixed(0)} · max ${hs[k + '_max'].toFixed(0)} °C</div>`;
+  const tile = (label, v, kind, src) =>
+    `<div class="temptile"><div class="muted" style="font-size:11px">${label}${stale}</div>
+      <div>${tempTxt(v, kind, src)}</div>${minmax(kind)}</div>`;
+  const chart = hist === undefined
+    ? '<div class="muted" style="font-size:11px;padding:6px 0">Loading history…</div>'
+    : healthChart(hist);
+  const note = p.note ? `<div class="hint" style="margin:8px 0 0;color:#99641a">${esc(p.note)}</div>` : '';
+  return `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#908e86;margin-bottom:8px">Hardware &amp; temperature</div>
+    <div style="margin-bottom:8px">${kv('BIOS', bios)}${kv('CPU', esc(p.cpu_name || '—'))}${kv('GPU', esc(p.gpu_name || '—'))}</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      ${tile('CPU temp', p.cpu_c, 'cpu', p.cpu_src)}${tile('GPU temp', p.gpu_c, 'gpu', p.gpu_src)}</div>
+    ${chart}${note}`;
+}
+
+// Per-PC configuration checks (the guards) for the expanded row.
+function fleetChecks(ip, guardCount) {
+  const guards = GUARDS.guards || [];
+  const res = (GUARDS.results || {})[ip] || {};
+  if (!guards.length) return '<div class="muted" style="font-size:12px">No guards defined.</div>';
+  const passed = guards.filter(g => (res[g.id] || {}).pass === true).length;
+  const rows = guards.map(g => {
+    const st = res[g.id];
+    let box, cls, txt;
+    if (!st) { box = '☐'; cls = 'muted'; txt = 'not checked'; }
+    else if (st.pass === true) { box = '☑'; cls = 'ok'; txt = 'pass'; }
+    else if (st.pass === false) { box = '☒'; cls = 'bad'; txt = 'fail'; }
+    else { box = '⏳'; cls = 'muted'; txt = st.detail || 'applying…'; }
+    const canApply = !!g.apply && (!st || st.pass !== true);
+    const applyBtn = canApply
+      ? `<button class="ghost" style="padding:1px 8px;font-size:11px" onclick="applyGuard('${esc(ip)}','${esc(g.id)}')">Apply</button>`
+      : (!g.apply && st && st.pass === false ? '<span class="muted" style="font-size:11px">fix by hand</span>' : '');
+    const tip = st && st.detail ? ' title="' + esc(st.detail) + '"' : '';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"${tip}>
+      <span class="${cls}" style="font-size:15px;width:18px">${box}</span>
+      <span style="flex:1;min-width:0">${esc(g.name)}</span>
+      <span class="${cls}" style="font-size:11px;min-width:34px;text-align:right">${esc(txt)}</span>
+      ${applyBtn}</div>`;
+  }).join('');
+  return `<div style="display:flex;align-items:center;margin-bottom:8px">
+      <span style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#908e86">Configuration checks</span>
+      <span class="${passed === guardCount ? 'ok' : 'bad'}" style="margin-left:auto;font-size:11px;font-weight:600">${passed}/${guardCount} checks pass</span>
+    </div>${rows}
+    <button class="ghost" style="margin-top:8px;padding:2px 10px;font-size:11px" onclick="recheckGuards('${esc(ip)}')">↻ Recheck this PC</button>`;
 }
 
 function renderVersions(v) {
@@ -719,84 +868,46 @@ async function driftPc(ip) {
     showDriftModal(ip, d.entries || []);
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
-// Repaint only on a real change: refresh() runs every few seconds and re-rendering
-// identical HTML would reload the asset <img>s (visible blink) and reset the file inputs.
-let guardsHtml = '', assetVer = 0;  // assetVer: cache-buster, bumped only by an upload
-function paintGuards(el, html) {
-  if (html === guardsHtml) return;
-  guardsHtml = html;
-  el.innerHTML = html;
-}
-function renderGuards(data, agents) {
-  const el = $('guards-list'); if (!el) return;
+// Installs tab = the shared assets (wallpaper, git bundle, sensor DLLs, …). Per-PC
+// compliance checks live under each computer in Fleet (fleetChecks). Repaint only on a
+// real change: refresh() runs every few seconds and re-rendering identical HTML would
+// reload the asset <img>s (visible blink) and reset the file inputs.
+let installsHtml = '', assetVer = 0;  // assetVer: cache-buster, bumped only by an upload
+function renderInstalls(data) {
+  const el = $('installs-assets'); if (!el) return;
   const guards = (data && data.guards) || [];
-  const results = (data && data.results) || {};
-  if (!guards.length) {
-    paintGuards(el, '<div class="muted" style="font-size:13px">No guards defined — add script pairs + a guards.json in the coordinator\'s <code>guards/</code> dir.</div>');
-    return;
-  }
-  // Assets (wallpaper image, git bundle, …): preview, upload, or replace.
+  // One row per distinct asset, tagged with the guard(s) that use it.
   const assetMap = {};
   guards.forEach(g => {
     const miss = new Set(g.assets_missing || []);
     (g.assets || []).forEach(a => { if (!(a in assetMap)) assetMap[a] = { guard: g.name, missing: miss.has(a) }; });
   });
-  const assetRows = Object.entries(assetMap).map(([name, info]) => {
+  const names = Object.keys(assetMap);
+  if (!names.length) {
+    const html = '<div class="muted" style="font-size:13px">No shared assets — guards reference them by name in the coordinator\'s <code>guards/</code> dir.</div>';
+    if (html !== installsHtml) { installsHtml = html; el.innerHTML = html; }
+    return;
+  }
+  const rows = names.map(name => {
+    const info = assetMap[name];
     const isImg = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
     // Stable URL so the browser reuses the cached image; only an upload busts it.
     const url = '/installs/asset/' + encodeURIComponent(name) + (assetVer ? '?v=' + assetVer : '');
     let thumb;
     if (info.missing) thumb = '<span class="bad" style="font-size:11px">missing</span>';
-    // Bound BOTH axes: a 16:9 wallpaper scaled to height alone overflows the cell
-    // and paints over the filename. Crop to fit; click to see the whole image.
+    // Bound BOTH axes: a 16:9 wallpaper scaled to height alone overflows the cell.
     else if (isImg) thumb = `<img src="${url}" onclick="enlargeImg('${esc(url)}')" style="height:38px;width:46px;object-fit:cover;border:1px solid #ccc;border-radius:4px;cursor:zoom-in;vertical-align:middle">`;
     else thumb = '<span class="ok" style="font-size:11px">present</span>';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0">
+    return `<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid #ece9e0">
       <span style="width:46px;flex-shrink:0;text-align:center">${thumb}</span>
-      <b>${esc(name)}</b> <span class="muted" style="font-size:11px">(${esc(info.guard)})</span>
-      <label style="margin-left:auto;font-size:11px">${info.missing ? 'Upload' : 'Replace'} <input type="file" style="font-size:11px" onchange="uploadAsset('${esc(name)}',this)"></label>
+      <div style="flex:1;min-width:0"><b>${esc(name)}</b> ${info.missing ? '' : '<span class="ok" style="font-size:10px">present</span>'}
+        <br><span class="muted" style="font-size:11px">${esc(info.guard)}</span></div>
+      <label class="ghost" style="padding:6px 10px;border-radius:8px;cursor:pointer;font-size:12px;flex-shrink:0">${info.missing ? 'Upload' : 'Replace'}
+        <input type="file" style="display:none" onchange="uploadAsset('${esc(name)}',this)"></label>
     </div>`;
   }).join('');
-  const missHdr = assetRows
-    ? `<div style="border:1px solid #ece9e0;border-radius:8px;padding:8px 10px;margin-bottom:10px">
-         <div class="hint" style="margin:0 0 4px">Assets — click an image to enlarge; Replace to change it.</div>${assetRows}</div>`
-    : '';
-  const online = Object.values(agents || {}).filter(a => a.online);
-  if (!online.length) { paintGuards(el, missHdr + '<div class="muted" style="font-size:13px">No PCs online.</div>'); return; }
-  // Checks run on the agent at launch and on the Recheck button — not auto from here.
-  paintGuards(el, missHdr + online.map(a => {
-    const ip = a.pc_ip, r = results[ip] || {};
-    const rows = guards.map(g => {
-      const st = r[g.id];
-      let box, cls, txt;
-      if (!st) { box = '☐'; cls = 'muted'; txt = 'not checked'; }
-      else if (st.pass === true) { box = '☑'; cls = 'ok'; txt = 'pass'; }
-      else if (st.pass === false) { box = '☒'; cls = 'bad'; txt = 'fail'; }
-      else { box = '⏳'; cls = 'muted'; txt = st.detail || 'applying…'; }
-      // No apply script = check-only guard (e.g. the PC name — rename it by hand).
-      const canApply = !!g.apply && (!st || st.pass !== true);
-      const applyBtn = canApply
-        ? `<button class="ghost" style="padding:1px 8px;font-size:11px" onclick="applyGuard('${esc(ip)}','${esc(g.id)}')">Apply</button>`
-        : (!g.apply && st && st.pass === false ? '<span class="muted" style="font-size:11px">fix by hand</span>' : '');
-      const tip = st && st.detail ? ' title="' + esc(st.detail) + '"' : '';
-      return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0"${tip}>
-        <span class="${cls}" style="font-size:15px;width:18px">${box}</span>
-        <span style="min-width:210px">${esc(g.name)}</span>
-        <span class="${cls}" style="font-size:11px;min-width:60px">${esc(txt)}</span>
-        ${applyBtn}</div>`;
-    }).join('');
-    const host = a.host || '';
-    // Name next to the IP; red when it breaks the WS-XX-XXX standard (see the pcname guard).
-    const nameCls = host && !/^WS-\d{2}-\d{3}$/.test(host) ? 'bad' : 'muted';
-    const nameTag = host
-      ? ` <span class="${nameCls}" style="font-size:12px" title="Windows computer name">${esc(host)}</span>`
-      : '';
-    return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-        <b>Computer ${esc(ip)}</b>${nameTag} <span class="muted" style="font-size:11px">${esc((agents[ip]||{}).folder||'')}</span>
-        <button class="ghost" style="margin-left:auto;padding:1px 8px;font-size:11px" onclick="recheckGuards('${esc(ip)}')">↻ Recheck</button>
-      </div>${rows}</div>`;
-  }).join(''));
+  const html = '<div class="hint" style="margin-top:0">Deployed to every PC. Replace to change the file everyone receives; click an image to enlarge.</div>' + rows;
+  if (html !== installsHtml) { installsHtml = html; el.innerHTML = html; }
 }
 function applyGuard(ip, id) {
   act(() => api('POST', '/guard/apply', { pc: ip, id }), 'Applying ' + id + ' on ' + ip + '…');
@@ -821,32 +932,8 @@ async function uploadAsset(name, input) {
     refresh();
   } catch (e) { toast('upload failed: ' + e.message, true); }
 }
-// ---- HealthCheck: BIOS + CPU/GPU temperature history -------------------
-// Fetched only while the tab is open (a chart per PC is a lot of points to pull
-// every few seconds), and repainted only on a real change — same reason as the
-// guards list: re-rendering identical HTML makes the charts flicker.
-let HEALTH_RANGE = 30, healthHtml = '', healthTimer = 0;
+// ---- temperature helpers (shared by Fleet's hardware panel + chart) ----
 const TEMP_LIMITS = { cpu: [70, 85], gpu: [75, 88] };  // [warn, hot] °C
-
-function setHealthRange(v) { HEALTH_RANGE = parseFloat(v) || 30; healthHtml = ''; loadHealth(); }
-
-async function loadHealth() {
-  const el = $('health-list'); if (!el) return;
-  clearTimeout(healthTimer);
-  const d = await safe(api('GET', '/health'));
-  if (!d) { el.innerHTML = '<div class="muted" style="font-size:13px">Coordinator unreachable.</div>'; return; }
-  const pcs = d.pcs || [];
-  if (!pcs.length) {
-    el.innerHTML = '<div class="muted" style="font-size:13px">No agent has reported yet — a PC appears here once its agent heartbeats.</div>';
-  } else {
-    const hist = await Promise.all(pcs.map(p =>
-      safe(api('GET', '/health/history?pc=' + encodeURIComponent(p.pc_ip) + '&days=' + HEALTH_RANGE))));
-    const html = pcs.map((p, i) => healthCard(p, hist[i])).join('');
-    if (html !== healthHtml) { healthHtml = html; el.innerHTML = html; }
-  }
-  // Agents sample every 5 min; polling once a minute keeps "now" honest without churn.
-  if ($('maintab-health').style.display !== 'none') healthTimer = setTimeout(loadHealth, 60000);
-}
 
 const tempCls = (v, kind) => {
   if (v == null) return 'muted';
@@ -859,47 +946,6 @@ function tempTxt(v, kind, src) {
   return `<b class="${tempCls(v, kind)}" style="font-size:15px">${v.toFixed(1)} °C</b>${srcTag}`;
 }
 
-function healthCard(p, h) {
-  const name = p.host || p.pc_ip;
-  const dot = p.online ? '<span class="ok">●</span>' : '<span class="muted">○</span>';
-  const st = (h && h.stats) || {};
-  const range = HEALTH_RANGE == 1 ? '24h' : HEALTH_RANGE + 'd';
-  const minmax = (k) => st[k + '_max'] == null ? ''
-    : `<span class="muted" style="font-size:11px">${range} min ${st[k + '_min'].toFixed(0)} · avg ${st[k + '_avg'].toFixed(0)} · max ${st[k + '_max'].toFixed(0)} °C</span>`;
-  const row = (label, val) => `<div style="display:flex;gap:8px;padding:1px 0"><span class="muted" style="font-size:11px;min-width:78px">${label}</span><span style="font-size:12px">${val}</span></div>`;
-  const bios = p.bios_version
-    ? esc(p.bios_version) + (p.bios_date ? ` <span class="muted" style="font-size:11px">(${esc(p.bios_date)})</span>` : '') +
-      (p.bios_vendor ? `<br><span class="muted" style="font-size:11px">${esc(p.bios_vendor)}</span>` : '')
-    : '<span class="muted">not reported yet</span>';
-  const note = p.note ? `<div class="hint" style="margin:6px 0 0;color:#99641a">${esc(p.note)}</div>` : '';
-  const stale = p.temp_at && (Date.now() / 1000 - p.temp_at) > 900
-    ? ` <span class="muted" style="font-size:10px">(${ago(p.temp_at)})</span>` : '';
-  return `<div style="border:1px solid #ece9e0;border-radius:8px;padding:10px 12px;margin-bottom:10px">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-      ${dot} <b>${esc(name)}</b>
-      <span class="muted" style="font-size:11px">${esc(p.pc_ip)}${p.folder ? ' · ' + esc(p.folder) : ''}</span>
-      <span class="muted" style="margin-left:auto;font-size:11px">agent ${esc(p.agent_version || '?')}</span>
-    </div>
-    <div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:6px">
-      <div style="min-width:230px">
-        ${row('BIOS', bios)}
-        ${row('CPU', esc(p.cpu_name || '—'))}
-        ${row('GPU', esc(p.gpu_name || '—'))}
-      </div>
-      <div style="min-width:170px">
-        <div class="muted" style="font-size:11px">CPU temperature${stale}</div>
-        <div>${tempTxt(p.cpu_c, 'cpu', p.cpu_src)}</div>
-        <div>${minmax('cpu')}</div>
-      </div>
-      <div style="min-width:170px">
-        <div class="muted" style="font-size:11px">GPU temperature${stale}</div>
-        <div>${tempTxt(p.gpu_c, 'gpu', p.gpu_src)}</div>
-        <div>${minmax('gpu')}</div>
-      </div>
-    </div>
-    ${healthChart(h)}${note}
-  </div>`;
-}
 
 // Inline SVG line chart — two series (CPU/GPU), average drawn solid with the
 // bucket's max behind it faintly, so a short spike isn't averaged away.
@@ -1133,16 +1179,13 @@ async function saveGlobalIgnore() {
 let nextDevTag = '';   // next dev-v1.x label, computed from /dev/versions
 
 function showMainTab(t) {
-  $('maintab-loads').style.display = t === 'loads' ? '' : 'none';
-  $('maintab-config').style.display = t === 'config' ? 'flex' : 'none';
-  $('maintab-health').style.display = t === 'health' ? '' : 'none';
-  $('maintab-seq').style.display = t === 'seq' ? '' : 'none';
-  $('mtab-loads').className = t === 'loads' ? '' : 'ghost';
-  $('mtab-config').className = t === 'config' ? '' : 'ghost';
-  $('mtab-health').className = t === 'health' ? '' : 'ghost';
-  $('mtab-seq').className = t === 'seq' ? '' : 'ghost';
+  const tabs = ['fleet', 'loads', 'config', 'installs', 'seq'];
+  if (!tabs.includes(t)) t = 'fleet';
+  tabs.forEach(x => {
+    $('maintab-' + x).style.display = t === x ? (x === 'config' ? 'flex' : '') : 'none';
+    $('mtab-' + x).className = t === x ? '' : 'ghost';
+  });
   localStorage.setItem('simMainTab', t);  // remember across refresh
-  if (t === 'health') loadHealth();  // charts are fetched per PC — only when looked at
 }
 const setConfigStatus = (m, c) => { const e = $('config-status'); if (e) { e.innerHTML = m; e.className = 'hint ' + (c || ''); } };
 
@@ -2133,7 +2176,7 @@ function seqErrorsDownload() {
 $('user').value = localStorage.getItem('simUser') || '';
 $('user').addEventListener('change', () => localStorage.setItem('simUser', who()));
 refresh();
-showMainTab(localStorage.getItem('simMainTab') || 'loads');  // restore last tab
+showMainTab(localStorage.getItem('simMainTab') || 'fleet');  // restore last tab
 showConfigTab('browser');  // default config sub-tab (view only)
 loadLastDevConfig();       // default the browser to the last dev load
 loadManifest();            // load YAML once (tab switches no longer reload)

@@ -72,15 +72,21 @@ path is trusted.
 ## Web UI
 
 Open `http://<pi-ip>:8090/` for the dashboard (served by the coordinator, single page,
-no build step), organised into four top tabs:
+no build step), organised into five top tabs:
 
-- **Loads** — PC status grid (online / mode `TRAINING`\|`TESTING` / running version /
-  clean-vs-dirty, with a per-PC *diff* of drifted files, plus a per-PC **actions**
-  dropdown: *Update agent* / *Wake on LAN* / *Force shut down* / *Remove from list*);
-  **Training Loads** (immutable `v1.x`, deploy any to the whole sim, *Re-deploy live*);
-  and **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* / *Redeploy testing*,
-  then *Promote to Training Load*, or *Delete* to discard one — the live one is protected);
-  and **Compare** (diff any two versions).
+- **Fleet** — the single per-PC view: every computer that runs an agent, one expandable
+  row each. Summary tiles across the top (PCs / online / seeded / unseeded / config issues).
+  The collapsed row shows online, mode (`TRAINING`\|`TESTING`\|`UNSEEDED`), running ref,
+  clean-vs-dirty (with a *diff* of drifted files), last-seen, agent build, and a per-PC
+  **actions** dropdown (*Update agent* / *Wake on LAN* / *Force shut down* / *Remove*).
+  Expand a row for its **Hardware & temperature** (BIOS, CPU/GPU names, live CPU/GPU temps
+  with a 24h/7d/30d history chart) and its **Configuration checks** (the guard checklist,
+  `N/M checks pass`, with per-item Apply and *Recheck this PC*). Agents sample sensors every
+  5 min; the coordinator keeps `HEALTH_RETENTION_DAYS` (30) and prunes on every write.
+- **Loads** — **Training Loads** (immutable `v1.x`, deploy any to the whole sim,
+  *Re-deploy live*); **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* /
+  *Redeploy testing*, then *Promote to Training Load*, or *Delete* to discard one — the live
+  one is protected); and **Compare** (diff any two versions).
 - **Load Configuration** — **Sync Configuration** (pick folders per PC from a live tree;
   uncheck a subfolder to *ignore* it; raw-YAML tab). Opens defaulted to the **last dev
   load**'s config. Typical dev loop: deploy the last dev version, tweak files **live** on
@@ -89,20 +95,19 @@ no build step), organised into four top tabs:
   what you changed (click a file for its diff); if it looks right, **Deploy** captures those
   edits from each PC → commits → creates a new `dev-v1.x` → deploys it (two-phase progress
   modal, ending in a link to the new load in **Loads**). The per-PC stepper (Save → Import →
-  snapshot) is still available for building a load from scratch. Also **Installs** (per-PC
-  compliance guards, see below) and **Global ignore**.
-- **HealthCheck** — every PC running an agent, with its BIOS (vendor / version / release
-  date) and CPU/GPU temperatures, plus a 30-day history chart per PC (24h / 7d / 30d).
-  Each agent samples its own sensors every 5 min and posts them; the coordinator keeps
-  `HEALTH_RETENTION_DAYS` (30) and prunes older samples on every write.
+  snapshot) is still available for building a load from scratch. Also **Global ignore**.
+- **Installs** — the **shared assets** pushed to every PC (wallpaper, git bundle, sensor
+  DLLs, PawnIO installer, VC++ redists — upload/replace here). The per-PC compliance
+  *checks* live under each computer in **Fleet**.
 - **Sequence Config** — in-browser block builder for the sim startup/shutdown
   `sequenceConfig.json` (import / edit / download; error-code catalogue).
 
 ### Installs (guards)
 
 Per-PC compliance items, each a PowerShell check (+ usually an apply) in `coordinator/guards/`,
-listed in `guards.json`. Each online PC shows its Windows name next to its IP, and ↻ Recheck
-re-runs every check on that PC.
+listed in `guards.json`. They surface under each computer in the **Fleet** tab (`N/M checks
+pass`, per-item Apply, *Recheck this PC*); their shared assets are managed in the **Installs**
+tab.
 
 | Guard | Asserts | Apply |
 | --- | --- | --- |
