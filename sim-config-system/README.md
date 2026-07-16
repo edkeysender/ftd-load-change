@@ -83,6 +83,11 @@ no build step), organised into five top tabs:
   with a 24h/7d/30d history chart) and its **Configuration checks** (the guard checklist,
   `N/M checks pass`, with per-item Apply and *Recheck this PC*). Agents sample sensors every
   5 min; the coordinator keeps `HEALTH_RETENTION_DAYS` (30) and prunes on every write.
+  A PC whose CPU or GPU has spent **at least `HEALTH_HOT_SUSTAIN_MIN` (20) cumulative
+  minutes at/above its hot threshold** (`HEALTH_CPU_HOT_C` 85 °C / `HEALTH_GPU_HOT_C` 88 °C)
+  in the last 24h is flagged **overheating** — a red row with a `🌡 hot: CPU 2h30m` chip,
+  a red temp tile, and a count in the **Overheating** summary tile. A momentary spike is
+  ignored; only sustained heat is flagged.
 - **Loads** — **Training Loads** (immutable `v1.x`, deploy any to the whole sim,
   *Re-deploy live*); **Development Loads** (`dev-v1.x` test builds — *Deploy to sim* /
   *Redeploy testing*, then *Promote to Training Load*, or *Delete* to discard one — the live

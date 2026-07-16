@@ -817,6 +817,9 @@ def health():
         ip = a["pc_ip"]
         st = static.get(ip, {})
         last = latest.get(ip, {})
+        hot = db.health_hot_minutes(ip, now - 86400, config.HEALTH_CPU_HOT_C, config.HEALTH_GPU_HOT_C)
+        overheating = (hot["cpu_min"] >= config.HEALTH_HOT_SUSTAIN_MIN or
+                       hot["gpu_min"] >= config.HEALTH_HOT_SUSTAIN_MIN)
         pcs.append({
             "pc_ip": ip, "folder": a.get("folder"), "host": a.get("host"),
             "online": a.get("online"), "mode": a.get("mode"),
@@ -829,10 +832,14 @@ def health():
             "cpu_c": last.get("cpu_c"), "gpu_c": last.get("gpu_c"),
             "temp_at": last.get("at"),
             "stats_24h": db.health_stats(ip, now - 86400),
+            "cpu_hot_min": hot["cpu_min"], "gpu_hot_min": hot["gpu_min"],
+            "overheating": overheating,
         })
     pcs.sort(key=lambda p: p["pc_ip"])
     return {"pcs": pcs, "retention_days": config.HEALTH_RETENTION_DAYS,
-            "sample_seconds": config.HEALTH_SAMPLE_SECONDS}
+            "sample_seconds": config.HEALTH_SAMPLE_SECONDS,
+            "cpu_hot_c": config.HEALTH_CPU_HOT_C, "gpu_hot_c": config.HEALTH_GPU_HOT_C,
+            "hot_sustain_min": config.HEALTH_HOT_SUSTAIN_MIN}
 
 
 @app.get("/health/history")

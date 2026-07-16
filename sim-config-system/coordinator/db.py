@@ -423,6 +423,20 @@ def health_stats(pc_ip, since):
         return dict(r) if r else {}
 
 
+def health_hot_minutes(pc_ip, since, cpu_hot, gpu_hot):
+    """Cumulative minutes each chip spent at/above its hot threshold since `since`.
+    Estimated as (hot sample count) x (sample interval) — samples are evenly spaced, so
+    this is the time the chip has actually been cooking, which is what stresses hardware."""
+    m = config.HEALTH_SAMPLE_SECONDS / 60.0
+    with conn() as c:
+        r = c.execute(
+            """SELECT SUM(CASE WHEN cpu_c >= ? THEN 1 ELSE 0 END) cpu_n,
+                      SUM(CASE WHEN gpu_c >= ? THEN 1 ELSE 0 END) gpu_n
+               FROM health_samples WHERE pc_ip=? AND at >= ?""",
+            (cpu_hot, gpu_hot, pc_ip, since)).fetchone()
+    return {"cpu_min": round((r["cpu_n"] or 0) * m), "gpu_min": round((r["gpu_n"] or 0) * m)}
+
+
 def health_history(pc_ip, since, bucket):
     """Temperature history bucketed into `bucket`-second slots (a 30-day span is
     thousands of samples — bucketing keeps the chart payload small). Each point

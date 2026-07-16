@@ -56,5 +56,12 @@ HEARTBEAT_TIMEOUT = 30
 HEALTH_RETENTION_DAYS = int(os.environ.get("SIM_HEALTH_RETENTION_DAYS", "30"))
 HEALTH_SAMPLE_SECONDS = int(os.environ.get("SIM_HEALTH_SAMPLE_SECONDS", "300"))
 
+# Overheating alert (Fleet highlights a PC in red): a chip counts as overheating when it
+# spends at least HEALTH_HOT_SUSTAIN_MIN cumulative minutes at/above its HOT threshold
+# within the last 24h — a momentary spike is ignored, a sustained cook is flagged.
+HEALTH_CPU_HOT_C = float(os.environ.get("SIM_HEALTH_CPU_HOT_C", "85"))
+HEALTH_GPU_HOT_C = float(os.environ.get("SIM_HEALTH_GPU_HOT_C", "88"))
+HEALTH_HOT_SUSTAIN_MIN = int(os.environ.get("SIM_HEALTH_HOT_SUSTAIN_MIN", "20"))
+
 # Shared bearer token for agent auth (OPEN QUESTION: replace with mTLS if LAN untrusted).
 AGENT_TOKEN = os.environ.get("SIM_AGENT_TOKEN", "change-me")

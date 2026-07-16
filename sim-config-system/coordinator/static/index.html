@@ -72,6 +72,15 @@
   .kv .k { font-size: 11px; color: #908e86; min-width: 42px; }
   .kv .v { font-size: 12px; }
   .temptile { border: 1px solid #ece9e0; border-radius: 8px; padding: 8px 12px; min-width: 150px; background: #fff; }
+  .temptile.hot { border-color: #e0a89f; background: #fdece9; }
+  /* Sustained-overheat highlight on a Fleet row */
+  tr.fleet-row.hot td { background: #fdece9; }
+  tr.fleet-row.hot:hover td { background: #fbe2e1; }
+  tr.fleet-row.hot td:first-child { box-shadow: inset 3px 0 0 #c0392b; }
+  .hotchip { display: inline-block; background: #fbe2e1; color: #c0392b; border-radius: 20px;
+             padding: 1px 8px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+  .stat.hot .n { color: #c0392b; }
+  .stat.hot.none .n { color: #1d7a59; }
 </style>
 </head>
 <body>
@@ -368,6 +377,7 @@ let AGENT_ERRORS = {};  // pc_ip -> last agent error message (for the ERROR pill
 let LAST_AGENTS = {};   // pc_ip -> agent, from the last refresh (for on-demand Fleet re-render)
 let GUARDS = { guards: [], results: {} };  // /guards: definitions + per-PC check results
 let HEALTH = {};        // pc_ip -> /health row (BIOS + latest temps + 24h stats)
+let HEALTH_META = { sustain: 20, cpuHot: 85, gpuHot: 88 };  // overheat thresholds from /health
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -386,6 +396,7 @@ async function refresh() {
   LAST_AGENTS = agents;
   GUARDS = insts || { guards: [], results: {} };
   HEALTH = {}; ((health && health.pcs) || []).forEach(p => HEALTH[p.pc_ip] = p);
+  if (health) HEALTH_META = { sustain: health.hot_sustain_min || 20, cpuHot: health.cpu_hot_c || 85, gpuHot: health.gpu_hot_c || 88 };
   AGENT_ERRORS = {}; ((pcs && pcs.agents) || []).forEach(a => { if (a.error) AGENT_ERRORS[a.pc_ip] = a.error; });
   DISMISSED = (pcs && pcs.dismissed) || [];
   DEPLOYPROG = (pcs && pcs.deploy_progress) || {};
@@ -457,22 +468,41 @@ function renderFleet(pcs, agents) {
   const guardCount = (GUARDS.guards || []).length;
 
   // Summary tiles.
-  let online = 0, seeded = 0, unseeded = 0, issues = 0;
+  let online = 0, seeded = 0, unseeded = 0, issues = 0, hot = 0;
   rows.forEach(p => {
     const a = agents[p.ip] || {};
     if (a.online) online++;
     if (!a.mode || a.mode === 'UNSEEDED') unseeded++; else seeded++;
     const res = (GUARDS.results || {})[p.ip] || {};
     if (Object.values(res).some(s => s && s.pass === false)) issues++;
+    if ((HEALTH[p.ip] || {}).overheating) hot++;
   });
   const tile = (n, l, cls) => `<div class="stat ${cls || ''}"><div class="n">${n}</div><div class="l">${l}</div></div>`;
   $('fleet-stats').innerHTML =
     tile(rows.length, 'PCs') + tile(online, 'Online') + tile(seeded, 'Seeded') +
-    tile(unseeded, 'Unseeded') + tile(issues, 'Config issues', 'issues' + (issues ? '' : ' none'));
+    tile(unseeded, 'Unseeded') + tile(issues, 'Config issues', 'issues' + (issues ? '' : ' none')) +
+    tile(hot, 'Overheating', 'hot' + (hot ? '' : ' none'));
 
   const html = rows.map(p => fleetRow(p, agents[p.ip] || {}, guardCount)).join('')
     || '<tr><td colspan="6" class="muted" style="padding-left:20px">No PCs yet — a PC appears once its agent checks in.</td></tr>';
   if (html !== fleetHtml) { fleetHtml = html; body.innerHTML = html; }
+}
+
+// Minutes -> compact duration, e.g. 130 -> "2h10m", 40 -> "40m".
+function hotDur(min) {
+  if (min >= 60) { const hh = Math.floor(min / 60), mm = min % 60; return hh + 'h' + (mm ? mm + 'm' : ''); }
+  return min + 'm';
+}
+// The overheat chip for a PC: which chip(s) have been cooking, and for how long in 24h.
+function hotChip(h) {
+  if (!h.overheating) return '';
+  const parts = [];
+  if (h.cpu_hot_min) parts.push('CPU ' + hotDur(h.cpu_hot_min));
+  if (h.gpu_hot_min) parts.push('GPU ' + hotDur(h.gpu_hot_min));
+  if (!parts.length) return '';
+  const tip = 'At or above the hot threshold (CPU ' + HEALTH_META.cpuHot + '°C / GPU ' + HEALTH_META.gpuHot +
+    '°C) for this long in the last 24h; flagged past ' + HEALTH_META.sustain + ' min.';
+  return `<span class="hotchip" title="${esc(tip)}">🌡 hot: ${esc(parts.join(', '))}</span>`;
 }
 
 function fleetRow(p, a, guardCount) {
@@ -494,8 +524,9 @@ function fleetRow(p, a, guardCount) {
   const modeCell = (a.mode === 'ERROR' && a.error)
     ? `<span class="pill error" style="cursor:pointer" title="Click to see the error" onclick="event.stopPropagation();showAgentError('${esc(ip)}')">ERROR ⚠</span>`
     : `<span class="pill ${mode.toLowerCase()}">${esc(mode)}</span>`;
-  const summary = `<tr class="fleet-row" onclick="toggleFleet('${esc(ip)}')">
-    <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name}
+  const chip = hotChip(h);
+  const summary = `<tr class="fleet-row${h.overheating ? ' hot' : ''}" onclick="toggleFleet('${esc(ip)}')">
+    <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name} ${chip}
       ${sub ? `<br><span class="muted" style="font-size:11px;margin-left:15px">${esc(sub)}</span>` : ''}
       ${host && nameCls === 'bad' ? '<br><span class="bad" style="font-size:10px;margin-left:15px">name not WS-XX-XXX</span>' : ''}</td>
     <td>${modeCell}</td>
@@ -530,11 +561,15 @@ function fleetHardware(p, hist) {
   const stale = p.temp_at && (Date.now() / 1000 - p.temp_at) > 900 ? ` <span class="muted" style="font-size:10px">(${ago(p.temp_at)})</span>` : '';
   const range = FLEET_RANGE == 1 ? '24h' : FLEET_RANGE + 'd';
   const hs = (hist && hist.stats) || st;
-  const minmax = k => hs[k + '_max'] == null ? ''
+  const minmax = k => (hs[k + '_min'] == null || hs[k + '_avg'] == null || hs[k + '_max'] == null) ? ''
     : `<div class="muted" style="font-size:11px">${range} min ${hs[k + '_min'].toFixed(0)} · avg ${hs[k + '_avg'].toFixed(0)} · max ${hs[k + '_max'].toFixed(0)} °C</div>`;
-  const tile = (label, v, kind, src) =>
-    `<div class="temptile"><div class="muted" style="font-size:11px">${label}${stale}</div>
-      <div>${tempTxt(v, kind, src)}</div>${minmax(kind)}</div>`;
+  const tile = (label, v, kind, src) => {
+    const hotMin = kind === 'cpu' ? p.cpu_hot_min : p.gpu_hot_min;
+    const isHot = hotMin >= HEALTH_META.sustain;
+    const hotNote = hotMin ? `<div class="${isHot ? 'bad' : 'muted'}" style="font-size:10px">🌡 hot ${hotDur(hotMin)} in 24h</div>` : '';
+    return `<div class="temptile${isHot ? ' hot' : ''}"><div class="muted" style="font-size:11px">${label}${stale}</div>
+      <div>${tempTxt(v, kind, src)}</div>${minmax(kind)}${hotNote}</div>`;
+  };
   const chart = hist === undefined
     ? '<div class="muted" style="font-size:11px;padding:6px 0">Loading history…</div>'
     : healthChart(hist);
