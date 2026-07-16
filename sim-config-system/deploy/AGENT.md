@@ -17,19 +17,17 @@ bash /opt/ftd-load-change/sim-config-system/deploy/build-agent.sh
 
 ## 2. Stage it on a Windows PC
 
-Pick one PC to start — e.g. the displays box `70.84.68.12`.
+Copy **only** `dist/simagent.exe` to a folder on the PC, e.g. `C:\sim-agent\`.
+**No config file is needed** — `build-agent.sh` bakes the coordinator URL and the
+shared token into the exe, and the agent auto-detects its identity (`pc_ip` +
+`folder`) from the coordinator via `/whoami` on first contact. The identity comes
+from the PC's own IP matched against `manifest.yaml`, so it always agrees with the
+central config on the Pi.
 
-1. Copy `dist/simagent.exe` and `agent/agent.example.json` to a folder on the PC,
-   e.g. `C:\sim-agent\`.
-2. Rename `agent.example.json` → `agent.json` (must sit next to the exe; the agent
-   reads `agent.json` from its working directory).
-3. Edit `agent.json`:
-   - `pc_ip` / `folder` — match this PC's row in `manifest.yaml`
-     (`70.84.68.12` / `pc-12-display`).
-   - `coordinator_url` — `http://<pi-ip>:8090` (e.g. `http://70.84.68.196:8090`).
-   - `token` — the value of `SIM_AGENT_TOKEN` from `/etc/sim-config.env` on the Pi
-     (`sudo grep SIM_AGENT_TOKEN /etc/sim-config.env`).
-   - `repo_path` / `git_remote` / `git_exe` — ignore for now (deploy only).
+Create an `agent.json` (next to the exe, from `agent/agent.example.json`) **only** to
+override a default — e.g. `{"enforce_on_start": false}` for a passive agent during
+testing, or a `git_exe` path. Everything else is discovered; you never put the URL,
+token, or identity in a file.
 
 ## 3. Run it
 
