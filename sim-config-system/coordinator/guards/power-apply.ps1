@@ -56,5 +56,16 @@ foreach ($d in @($devs | Where-Object { $_.Enable })) {
 }
 $did += "device power saving: disabled on $changed device(s)$(if ($failed) { ", $failed refused" })"
 
+# NICs are the ones that matter most and the ones that most often refuse the WMI write
+# (some Realtek drivers do). Set them again through the netadapter API, which writes the
+# SAME "allow the computer to turn off this device" checkbox that power-check reads - so
+# a NIC that rejected the sweep above still ends up disabled.
+$nic = 0
+foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Not Present' })) {
+  Set-NetAdapterPowerManagement -Name $a.Name -AllowComputerToTurnOffDevice Disabled -ErrorAction SilentlyContinue
+  $nic++
+}
+$did += "NIC power-down: off on $nic adapter(s) (netadapter API)"
+
 Write-Output ($did -join '; ')
 exit 0
