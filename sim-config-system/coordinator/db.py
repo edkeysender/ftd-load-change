@@ -119,6 +119,14 @@ def init():
             c.execute("ALTER TABLE agents ADD COLUMN mac TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # One-off cleanup: early builds stored LibreHardwareMonitor's 0 C "could not
+        # poll" value as a real sample, which charts as a 0 C CPU and drags the axis
+        # below freezing. Null those out and drop rows left with no reading at all.
+        c.execute(f"UPDATE health_samples SET cpu_c=NULL WHERE cpu_c IS NOT NULL"
+                  f" AND (cpu_c < {_TEMP_MIN} OR cpu_c > {_TEMP_MAX})")
+        c.execute(f"UPDATE health_samples SET gpu_c=NULL WHERE gpu_c IS NOT NULL"
+                  f" AND (gpu_c < {_TEMP_MIN} OR gpu_c > {_TEMP_MAX})")
+        c.execute("DELETE FROM health_samples WHERE cpu_c IS NULL AND gpu_c IS NULL")
         # Migration for the agents.host column (Windows computer name).
         try:
             c.execute("ALTER TABLE agents ADD COLUMN host TEXT")
@@ -355,6 +363,16 @@ def list_discovered():
 _HEALTH_KEYS = ("bios_vendor", "bios_version", "bios_date", "cpu_name",
                 "gpu_name", "cpu_src", "gpu_src", "note")
 
+# Temperatures outside this range are not readings. LibreHardwareMonitor reports 0 for
+# sensors whose driver could not poll them, and a 0 C CPU charted next to a real one
+# looks like a healthy chip. The probe already filters; this is the same rule at the
+# door, so a stale agent build cannot poison the history either.
+_TEMP_MIN, _TEMP_MAX = 5, 150
+
+
+def _plausible(v):
+    return v if isinstance(v, (int, float)) and _TEMP_MIN <= v <= _TEMP_MAX else None
+
 
 def record_health(pc_ip, s):
     """Store one health sample from an agent: refresh the PC's static inventory and
@@ -370,7 +388,7 @@ def record_health(pc_ip, s):
                   {', '.join(f'{k}=excluded.{k}' for k in _HEALTH_KEYS)}, at=excluded.at""",
             (pc_ip, *vals, now),
         )
-        cpu, gpu = s.get("cpu_c"), s.get("gpu_c")
+        cpu, gpu = _plausible(s.get("cpu_c")), _plausible(s.get("gpu_c"))
         if cpu is not None or gpu is not None:
             c.execute("INSERT INTO health_samples (pc_ip, at, cpu_c, gpu_c) VALUES (?,?,?,?)",
                       (pc_ip, now, cpu, gpu))

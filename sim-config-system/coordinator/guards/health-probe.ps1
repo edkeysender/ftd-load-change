@@ -19,16 +19,23 @@ $out = [ordered]@{
   note = $null
 }
 
-# Why LHM enumerated sensors but every value was null. Its driver needs both admin
-# and permission to load; on Win11 the usual blocker is Memory Integrity (Core
-# Isolation), which rejects WinRing0.sys via the vulnerable-driver blocklist.
+# Why LHM enumerated sensors but every value was null. Checked in the order they actually
+# bite: LHM 0.9.x reads CPU sensors through the PawnIO kernel driver (it no longer ships
+# WinRing0 - it carries PawnIO modules like RyzenSMU/IntelMSR as embedded resources), so
+# a missing PawnIO is by far the most common cause and is checked before the exotic ones.
 function Get-NoSensorReason {
   $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   if (-not $admin) { return 'the agent is not running as administrator (the sensor driver needs it).' }
+  $pawn = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO') |
+          Where-Object { Test-Path $_ }
+  if (-not $pawn) {
+    return 'the PawnIO driver is not installed - LibreHardwareMonitor reads CPU sensors through it. Apply the Hardware sensors guard (Load Configuration > Installs) to install it.'
+  }
   $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard
   if ($dg -and $dg.SecurityServicesRunning -contains 2) {
-    return 'Memory Integrity (Core Isolation) is ON and blocks the sensor driver. Turn it off in Windows Security > Device security > Core isolation, then reboot.'
+    return 'Memory Integrity (Core Isolation) is ON and may be blocking the sensor driver. Turn it off in Windows Security > Device security > Core isolation, then reboot.'
   }
   return 'its sensor driver could not load on this PC.'
 }

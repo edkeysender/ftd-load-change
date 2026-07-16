@@ -48,14 +48,46 @@ try {
 # Windows blocks loading DLLs that carry the downloaded-from-internet mark.
 Get-ChildItem -Path $lhmDir -Filter *.dll | Unblock-File -ErrorAction SilentlyContinue
 
+# --- PawnIO: the kernel driver LHM 0.9.x reads CPU sensors through ---------
+# LHM no longer ships WinRing0; it carries PawnIO modules (RyzenSMU, IntelMSR, ...) as
+# embedded resources and needs the PawnIO driver present, or every sensor reads null.
+# Flags are from the installer's own help text: -install -silent. It refuses to install
+# over an existing copy ("a previous installation was found"), so check first.
+$pawnKeys = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO',
+              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO')
+$pawn = @($pawnKeys | Where-Object { Test-Path $_ }).Count -gt 0
+$note = ''
+if ($pawn) {
+  $note = '; PawnIO already installed'
+} else {
+  $setup = Join-Path $src 'PawnIO_setup.exe'
+  if (-not (Test-Path $setup)) {
+    $note = '; PawnIO_setup.exe not delivered - run deploy/fetch-pawnio.sh on the coordinator (CPU temps need it on boards with no ACPI thermal zone)'
+  } else {
+    try {
+      $p = Start-Process -FilePath $setup -ArgumentList '-install', '-silent' -PassThru -WindowStyle Hidden -ErrorAction Stop
+      # Never block the agent forever if a dialog appears despite -silent.
+      if (-not $p.WaitForExit(180000)) { $p.Kill(); throw 'installer did not finish within 180s' }
+      $pawn = @($pawnKeys | Where-Object { Test-Path $_ }).Count -gt 0
+      if ($pawn) { $note = '; PawnIO installed' }
+      else { $note = "; PawnIO installer exited $($p.ExitCode) but did not register - CPU temps will stay empty" }
+    } catch {
+      $note = "; PawnIO install failed: $($_.Exception.Message)"
+    }
+  }
+}
+
 if ($locked.Count -gt 0) {
   Write-Output ("in use, could not replace: " + ($locked -join ', ') +
-                " - a process has them loaded. Close any PowerShell window that ran Add-Type on them, or restart the agent, then Apply again.")
+                " - a process has them loaded. Close any PowerShell window that ran Add-Type on them, or restart the agent, then Apply again." + $note)
   exit 1
 }
 if (-not (Test-Path (Join-Path $lhmDir 'LibreHardwareMonitorLib.dll'))) {
-  Write-Output "unpacked to $lhmDir but LibreHardwareMonitorLib.dll is not among the files"
+  Write-Output ("unpacked to $lhmDir but LibreHardwareMonitorLib.dll is not among the files" + $note)
   exit 1
 }
-Write-Output "sensor dlls in $lhmDir - $copied installed/updated, $same already current"
+Write-Output ("sensor dlls in $lhmDir - $copied installed/updated, $same already current" + $note)
+# The DLLs are in place; without PawnIO they will read nothing, so say so loudly rather
+# than reporting success and leaving the temperature mysteriously blank.
+if (-not $pawn) { exit 1 }
 exit 0

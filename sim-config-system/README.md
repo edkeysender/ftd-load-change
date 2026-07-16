@@ -114,7 +114,7 @@ re-runs every check on that PC.
 | Notifications disabled | toasts, notification centre, tips, Defender alerts | ✅ |
 | Wallpaper | desktop/lock image is the standard | ✅ |
 | Git / SSH / VC++ | prerequisites present | ✅ |
-| Hardware sensors | a CPU temperature is readable (for HealthCheck) | ✅ (needs the LHM DLLs uploaded) |
+| Hardware sensors | a CPU temperature is readable (for HealthCheck) | ✅ (unpacks the LHM DLLs + installs the PawnIO driver) |
 
 A guard may omit `apply` (check-only); the dashboard then shows no Apply button.
 Guard scripts run with `SIM_PC_IP` (this PC's coordinator-facing IP), `SIM_LHM` (sensor
@@ -142,20 +142,38 @@ boards) → LibreHardwareMonitor. GPU: `nvidia-smi` (any NVIDIA driver) → Libr
 (covers AMD/Intel). A PC with no source reports `no reading` **plus the reason** — it never
 invents a value.
 
-To enable the LHM fallback, run `sudo bash deploy/fetch-lhm.sh` on the Pi (pi-setup.sh
-already does) to build `installs/lhm.zip`, then **Apply** the *Hardware sensors* guard —
-it unpacks the DLLs next to the agent (`C:\sim-agent\lhm`) and unblocks them.
-`lhm.zip` carries **all** of the upstream root DLLs, not just `LibreHardwareMonitorLib.dll`:
-it references `HidSharp`, `System.Memory`, `BlackSharp.Core`, `DiskInfoToolkit`,
-`RAMSPDToolkit-NDD` and `System.Runtime.CompilerServices.Unsafe`, and a missing one fails
-at load with the unhelpful *"Unable to load one or more of the requested types"*.
+To enable the LHM fallback, run `sudo bash deploy/fetch-lhm.sh` and `sudo bash
+deploy/fetch-pawnio.sh` on the Pi (pi-setup.sh already does), then **Apply** the
+*Hardware sensors* guard: it unpacks the DLLs next to the agent (`C:\sim-agent\lhm`),
+unblocks them, and installs PawnIO silently.
+
+Two non-obvious things, both learned the hard way:
+
+- `lhm.zip` carries **all** of the upstream root DLLs, not just `LibreHardwareMonitorLib.dll`.
+  It references `HidSharp`, `System.Memory`, `BlackSharp.Core`, `DiskInfoToolkit`,
+  `RAMSPDToolkit-NDD` and `System.Runtime.CompilerServices.Unsafe`; a missing one fails at
+  load with the unhelpful *"Unable to load one or more of the requested types"*.
+- **LHM 0.9.x does not ship WinRing0.** It carries PawnIO *modules* (`RyzenSMU.bin`,
+  `AMDFamily17.bin`, `IntelMSR.bin`, …) as embedded resources and reads sensors through the
+  separately-installed **PawnIO** kernel driver (open source, Authenticode-signed by
+  namazso.eu). Without it LHM enumerates every sensor and reads `null` — or `0`, which is
+  worse, because it looks like a reading. `fetch-pawnio.sh` pulls the official installer;
+  `sensors-apply.ps1` runs it as `-install -silent` only where it is absent (its own help
+  text documents those flags; it refuses to install over an existing copy).
 
 Three things must ALL be true for a CPU temperature, and the guard names whichever is missing:
-1. `lhm.zip` installed on the PC (the *Hardware sensors* guard's Apply);
-2. the **agent running elevated** — LHM reads MSRs through a kernel driver. Install it as a
-   scheduled task with *Run with highest privileges* (see `deploy/AGENT.md`);
-3. **Memory Integrity (Core Isolation) OFF** — it blocks LHM's driver via the
-   vulnerable-driver blocklist, and sensors then read `null` on every value.
+1. `lhm.zip` unpacked on the PC (*Hardware sensors* → Apply);
+2. **PawnIO installed** (same Apply);
+3. the **agent running elevated** — the driver needs an admin token. Install the agent as a
+   scheduled task with *Run with highest privileges* (see `deploy/AGENT.md`).
+
+Memory Integrity (Core Isolation) blocked the *old* WinRing0-based approach and is still
+reported as a possible cause, but PawnIO is signed and is not on the vulnerable-driver
+blocklist, so it is no longer expected to matter.
+
+Temperatures outside 5–150 °C are treated as absent by the probe **and** rejected at the
+coordinator on ingest — LHM reports `0` for sensors it could not poll, and a 0 °C CPU
+charted beside a real one reads as a healthy chip.
 
 Enter your name (top-right) — it's recorded as the author of seals, promotes and dev builds.
 

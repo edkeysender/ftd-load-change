@@ -73,8 +73,8 @@
   {
     "id": "sensors",
     "name": "Hardware sensors (CPU temp)",
-    "desc": "This PC can report a CPU temperature to HealthCheck. Most desktop boards need LibreHardwareMonitor: build lhm.zip with deploy/fetch-lhm.sh (or upload it under Assets), then Apply. It also needs the agent running elevated, and Memory Integrity (Core Isolation) off. NVIDIA GPU temps need none of this (nvidia-smi).",
-    "assets": ["lhm.zip"],
+    "desc": "This PC can report a CPU temperature to HealthCheck. Boards with no ACPI thermal zone (most AMD desktops) need LibreHardwareMonitor + the PawnIO kernel driver it reads sensors through: build the assets with deploy/fetch-lhm.sh and deploy/fetch-pawnio.sh, then Apply - it unpacks the DLLs and installs PawnIO silently. Also needs the agent running elevated. NVIDIA GPU temps need none of this (nvidia-smi).",
+    "assets": ["lhm.zip", "PawnIO_setup.exe"],
     "check": "sensors-check.ps1",
     "apply": "sensors-apply.ps1"
   },

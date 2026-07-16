@@ -40,11 +40,14 @@ git lfs install --system 2>/dev/null || git lfs install || true   # enable LFS f
 
 echo "[2/5] Creating data dir + venv..."
 mkdir -p "$DATA_DIR/work"
-# Sensor DLLs for the `sensors` guard / HealthCheck temperatures. Fetched rather than
-# vendored (third-party binaries stay out of git); non-fatal, as it needs the internet
-# and everything else works without it - re-run deploy/fetch-lhm.sh later.
+# Sensor assets for the `sensors` guard / HealthCheck CPU temperatures: the
+# LibreHardwareMonitor DLLs and the PawnIO driver they read sensors through. Fetched
+# rather than vendored (third-party binaries stay out of git); both non-fatal, as they
+# need the internet and everything else works without them - re-run the scripts later.
 SIM_INSTALLS_DIR="$DATA_DIR/installs" bash "$SCRIPT_DIR/fetch-lhm.sh" \
     || echo "  (LibreHardwareMonitor fetch failed - run deploy/fetch-lhm.sh later for CPU temps)"
+SIM_INSTALLS_DIR="$DATA_DIR/installs" bash "$SCRIPT_DIR/fetch-pawnio.sh" \
+    || echo "  (PawnIO fetch failed - run deploy/fetch-pawnio.sh later for CPU temps)"
 if [ ! -d "$REPO_DIR/.venv" ]; then
     python3 -m venv "$REPO_DIR/.venv"
 fi

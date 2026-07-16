@@ -41,14 +41,20 @@ try {
   if ($null -ne $val) { $val = [math]::Round($val, 1) }
   $comp.Close()
   if ($null -ne $val) { Write-Output "CPU temp readable via LibreHardwareMonitor ($val C)"; exit 0 }
-  # No plausible value = the driver did not load (LHM then reports null, or 0). Say why.
+  # No plausible value = the driver did not load (LHM then reports null, or 0). Say why,
+  # cheapest/likeliest cause first - see health-probe.ps1's Get-NoSensorReason.
   $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
            ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  $pawn = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO') |
+          Where-Object { Test-Path $_ }
   $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard
   if (-not $admin) {
     Write-Output 'LibreHardwareMonitor loaded but read nothing: the agent is not running as administrator (its sensor driver needs it)'
+  } elseif (-not $pawn) {
+    Write-Output 'LibreHardwareMonitor loaded but read nothing: the PawnIO driver is not installed - it reads CPU sensors through it. Click Apply to install it.'
   } elseif ($dg -and $dg.SecurityServicesRunning -contains 2) {
-    Write-Output 'LibreHardwareMonitor loaded but read nothing: Memory Integrity (Core Isolation) is ON and blocks its sensor driver - turn it off in Windows Security > Device security > Core isolation, then reboot'
+    Write-Output 'LibreHardwareMonitor loaded but read nothing: Memory Integrity (Core Isolation) is ON and may be blocking its sensor driver - turn it off in Windows Security > Device security > Core isolation, then reboot'
   } else {
     Write-Output 'LibreHardwareMonitor loaded but read nothing: its sensor driver could not load on this PC'
   }
