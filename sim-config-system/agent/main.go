@@ -189,6 +189,8 @@ func (a *Agent) dispatch(c Command) {
 		a.doUpdate(c) // download new build, swap exe, relaunch
 	case "shutdown":
 		a.doShutdown(c) // PC status: force power off this PC
+	case "health":
+		a.sampleAndPost() // dashboard "refresh temperature": sample sensors now
 	default:
 		log.Printf("unknown command: %s", c.Type)
 	}

@@ -116,7 +116,7 @@ tab.
 
 | Guard | Asserts | Apply |
 | --- | --- | --- |
-| Computer name | name matches `WS-XX-XXX` (X = digit) | — check only, rename needs a reboot |
+| Computer name | name matches `WS-XX-XXX` (X = digit), optional `-role` suffix (e.g. `WS-25-024-display`), case-insensitive | — check only, rename needs a reboot |
 | Clock in sync | shows the PC's system time; within 60s of the **coordinator's** clock | ✅ (resync, else set from the coordinator) |
 | Max performance | High/Ultimate plan, no idle timeouts, no hibernation, no device power-down | ✅ |
 | Wake-on-LAN ready | NIC holding the coordinator-facing IP wakes on magic packet | ✅ (BIOS/UEFI wake is still manual) |
@@ -224,7 +224,7 @@ Agent-facing: `GET /whoami`, `POST /agents/{ip}/heartbeat`, `GET /agents/{ip}/co
 `GET /agents/{ip}/enforce`, `GET /agents/{ip}/browse|drift|filediff`,
 `POST /agents/{ip}/{import|size-report|capture|deploy|drift|filediff|guard|install}-result`,
 `POST /agents/{ip}/update|forget|shutdown|wake`, `POST /agents/{ip}/health`,
-`GET /agent/binary`.
+`POST /agents/{ip}/health/refresh` (manual temp sample), `GET /agent/binary`.
 Wake-on-LAN uses the PC's last-known MAC (reported on every heartbeat); force
 shutdown is queued for the agent (`shutdown /s /f /t 0`). The heartbeat also
 carries the PC's Windows name, shown next to its IP under **Installs** and

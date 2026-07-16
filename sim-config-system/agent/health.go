@@ -46,14 +46,20 @@ func (a *Agent) lhmDir() string { return filepath.Join(filepath.Dir(a.cfg.RepoPa
 
 func (a *Agent) runHealthLoop() {
 	for {
-		s, err := a.sampleHealth()
-		if err != nil {
-			log.Printf("[health] %v", err)
-		} else {
-			a.api.PostHealth(a.cfg.PCIP, s)
-		}
+		a.sampleAndPost()
 		time.Sleep(healthInterval)
 	}
+}
+
+// sampleAndPost reads the sensors once and uploads the result. Used by the 5-minute
+// loop and by the on-demand "health" command (the dashboard's manual temp refresh).
+func (a *Agent) sampleAndPost() {
+	s, err := a.sampleHealth()
+	if err != nil {
+		log.Printf("[health] %v", err)
+		return
+	}
+	a.api.PostHealth(a.cfg.PCIP, s)
 }
 
 func (a *Agent) sampleHealth() (*HealthSample, error) {

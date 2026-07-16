@@ -2,7 +2,7 @@
   {
     "id": "pcname",
     "name": "Computer name (WS-XX-XXX)",
-    "desc": "PC name follows the standard WS-XX-XXX, X = a digit (e.g. WS-01-002). Check only — rename by hand, it needs a reboot.",
+    "desc": "PC name follows the standard WS-XX-XXX, X = a digit, optionally with a -role suffix (e.g. WS-01-002 or WS-25-024-display). Check only — rename by hand, it needs a reboot.",
     "assets": [],
     "check": "pcname-check.ps1"
   },

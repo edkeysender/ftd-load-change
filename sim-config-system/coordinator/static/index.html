@@ -517,7 +517,8 @@ function fleetRow(p, a, guardCount) {
                : '<span class="bad">dirty</span> <button class="ghost" style="padding:1px 6px;font-size:10px" onclick="event.stopPropagation();driftPc(\'' + esc(ip) + '\')">diff</button>')
     : '';
   const host = p.host || h.host || '';
-  const nameCls = host && !/^WS-\d{2}-\d{3}$/.test(host) ? 'bad' : 'muted';
+  // WS-XX-XXX, optionally with a -role suffix (e.g. WS-25-024-display); case-insensitive.
+  const nameCls = host && !/^WS-\d{2}-\d{3}(-[a-z0-9]+)*$/i.test(host) ? 'bad' : 'muted';
   const name = host ? `<b>${esc(host)}</b> <span class="muted" style="font-size:11px">${esc(ip)}</span>`
                     : `<b>${esc(ip)}</b>`;
   const sub = p.folder || h.folder || '';
@@ -528,7 +529,7 @@ function fleetRow(p, a, guardCount) {
   const summary = `<tr class="fleet-row${h.overheating ? ' hot' : ''}" onclick="toggleFleet('${esc(ip)}')">
     <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name} ${chip}
       ${sub ? `<br><span class="muted" style="font-size:11px;margin-left:15px">${esc(sub)}</span>` : ''}
-      ${host && nameCls === 'bad' ? '<br><span class="bad" style="font-size:10px;margin-left:15px">name not WS-XX-XXX</span>' : ''}</td>
+      ${host && nameCls === 'bad' ? '<br><span class="bad" style="font-size:10px;margin-left:15px">name not WS-XX-XXX[-role]</span>' : ''}</td>
     <td>${modeCell}</td>
     <td>${esc(ref)}</td>
     <td>${state}</td>
@@ -574,7 +575,15 @@ function fleetHardware(p, hist) {
     ? '<div class="muted" style="font-size:11px;padding:6px 0">Loading history…</div>'
     : healthChart(hist);
   const note = p.note ? `<div class="hint" style="margin:8px 0 0;color:#99641a">${esc(p.note)}</div>` : '';
-  return `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#908e86;margin-bottom:8px">Hardware &amp; temperature</div>
+  // Last sample time + a manual "sample now" icon (agents otherwise sample every 5 min).
+  const updated = p.temp_at
+    ? `temps updated <span title="${esc(new Date(p.temp_at * 1000).toLocaleString())}">${ago(p.temp_at)}</span>`
+    : 'no reading yet';
+  const refreshBtn = p.pc_ip
+    ? `<button class="ghost" style="padding:1px 7px;font-size:12px;line-height:1" title="Sample sensors now" onclick="event.stopPropagation();refreshTemps('${esc(p.pc_ip)}')">↻</button>` : '';
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#908e86">Hardware &amp; temperature</span>
+      <span class="muted" style="margin-left:auto;font-size:11px">${updated}</span>${refreshBtn}</div>
     <div style="margin-bottom:8px">${kv('BIOS', bios)}${kv('CPU', esc(p.cpu_name || '—'))}${kv('GPU', esc(p.gpu_name || '—'))}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       ${tile('CPU temp', p.cpu_c, 'cpu', p.cpu_src)}${tile('GPU temp', p.gpu_c, 'gpu', p.gpu_src)}</div>
@@ -949,6 +958,12 @@ function applyGuard(ip, id) {
 }
 function recheckGuards(ip) {
   act(() => api('POST', '/guard/check-all', { pc: ip }), 'Re-checking ' + ip + '…');
+}
+// Ask the agent to sample sensors now; the fresh reading lands within a few seconds and
+// the next poll shows it. The agent must be online to pick up the request.
+function refreshTemps(ip) {
+  act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/health/refresh', {}),
+      'Sampling temperature on ' + ip + ' — updates in a few seconds');
 }
 function enlargeImg(url) {
   $('drift-title').textContent = 'Preview';

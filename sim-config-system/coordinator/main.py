@@ -593,6 +593,15 @@ def agent_shutdown(pc_ip: str):
     return {"ok": True, "pc_ip": pc_ip}
 
 
+@app.post("/agents/{pc_ip}/health/refresh")
+def agent_health_refresh(pc_ip: str):
+    """Ask a PC's agent to sample its sensors NOW instead of waiting for the 5-minute
+    loop (the dashboard's manual temperature refresh). The new reading lands within a
+    few seconds via the normal /agents/{ip}/health post."""
+    manifest.enqueue(pc_ip, {"type": "health"})
+    return {"ok": True, "pc_ip": pc_ip}
+
+
 def _send_wol(mac: str):
     """Broadcast a Wake-on-LAN magic packet for `mac` on the LAN (UDP :9)."""
     hexmac = mac.replace(":", "").replace("-", "").strip()
