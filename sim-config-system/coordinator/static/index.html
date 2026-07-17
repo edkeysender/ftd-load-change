@@ -983,7 +983,9 @@ async function uploadAsset(name, input) {
   } catch (e) { toast('upload failed: ' + e.message, true); }
 }
 // ---- temperature helpers (shared by Fleet's hardware panel + chart) ----
-const TEMP_LIMITS = { cpu: [70, 85], gpu: [75, 88] };  // [warn, hot] °C
+// [warn (amber), hot (red)] °C for the instantaneous reading. CPU hot = 95, the Ryzen/
+// Intel Tjmax ceiling — X3D chips boost to ~90 by design, so a 91 peak reads amber, not red.
+const TEMP_LIMITS = { cpu: [85, 95], gpu: [75, 88] };
 
 const tempCls = (v, kind) => {
   if (v == null) return 'muted';

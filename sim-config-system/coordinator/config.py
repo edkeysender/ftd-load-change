@@ -59,7 +59,10 @@ HEALTH_SAMPLE_SECONDS = int(os.environ.get("SIM_HEALTH_SAMPLE_SECONDS", "300"))
 # Overheating alert (Fleet highlights a PC in red): a chip counts as overheating when it
 # spends at least HEALTH_HOT_SUSTAIN_MIN cumulative minutes at/above its HOT threshold
 # within the last 24h — a momentary spike is ignored, a sustained cook is flagged.
-HEALTH_CPU_HOT_C = float(os.environ.get("SIM_HEALTH_CPU_HOT_C", "85"))
+# CPU 95 C = the AMD Ryzen (and Intel) Tjmax throttle ceiling: modern chips, especially
+# Ryzen X3D, boost to ~90 C by design, so only being pegged at the 95 C limit is a real
+# alert. Tune per-site via the env vars if your hardware runs hotter/cooler.
+HEALTH_CPU_HOT_C = float(os.environ.get("SIM_HEALTH_CPU_HOT_C", "95"))
 HEALTH_GPU_HOT_C = float(os.environ.get("SIM_HEALTH_GPU_HOT_C", "88"))
 HEALTH_HOT_SUSTAIN_MIN = int(os.environ.get("SIM_HEALTH_HOT_SUSTAIN_MIN", "20"))
 

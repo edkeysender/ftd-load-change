@@ -84,7 +84,8 @@ no build step), organised into five top tabs:
   `N/M checks pass`, with per-item Apply and *Recheck this PC*). Agents sample sensors every
   5 min; the coordinator keeps `HEALTH_RETENTION_DAYS` (30) and prunes on every write.
   A PC whose CPU or GPU has spent **at least `HEALTH_HOT_SUSTAIN_MIN` (20) cumulative
-  minutes at/above its hot threshold** (`HEALTH_CPU_HOT_C` 85 °C / `HEALTH_GPU_HOT_C` 88 °C)
+  minutes at/above its hot threshold** (`HEALTH_CPU_HOT_C` 95 °C — the Ryzen/Intel Tjmax
+  ceiling, since X3D chips boost to ~90 °C by design — / `HEALTH_GPU_HOT_C` 88 °C)
   in the last 24h is flagged **overheating** — a red row with a `🌡 hot: CPU 2h30m` chip,
   a red temp tile, and a count in the **Overheating** summary tile. A momentary spike is
   ignored; only sustained heat is flagged.
