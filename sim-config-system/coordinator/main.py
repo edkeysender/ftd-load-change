@@ -221,13 +221,20 @@ def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
 
 
 def _enqueue_deploy_all():
-    ips = list(manifest.load_manifest()["pcs"])
+    # Target the PCs defined by the VERSION being deployed (training-live already points at
+    # it), not the current working manifest. A snapshot can include PCs the working config
+    # has since dropped or renamed; deploying that snapshot must still reach all of its PCs.
+    # Using the working manifest silently skipped any PC missing from it (see the deploy
+    # that hit 2 of 3 computers).
+    ref = config.TRAINING_LIVE
+    ips = list(manifest.load_manifest_at(ref).get("pcs", {}))
     _deploy_progress.clear()  # fresh deploy — start tracking sync per PC
     now = time.time()
     for ip in ips:
         _deploy_progress[ip] = {"state": "syncing", "at": now,
                                 "expected": _last_deploy_dur.get(ip)}  # None until first timing
-    manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "deploy", config.TRAINING_LIVE))
+    for ip in ips:
+        manifest.enqueue(ip, _mirror_cmd(ip, "deploy", ref))
 
 
 # ===================== UI / operator endpoints ==========================
@@ -911,9 +918,12 @@ def enforce(pc_ip: str, authorization: str | None = Header(None)):
     but it NEVER resyncs or relaunches on start. Files/apps change only on an explicit
     Deploy. Null until v1.0 is sealed or if the PC isn't in the manifest."""
     _auth(authorization)
-    if pc_ip not in manifest.load_manifest()["pcs"]:
-        return {"command": None}
     if not git_ops.ref_sha(config.TRAINING_LIVE):
+        return {"command": None}
+    # Membership is judged against the DEPLOYED version's manifest, not the working config -
+    # a PC can be part of what's live yet already dropped from the working manifest. Matches
+    # the deploy target set so both agree on which PCs the live load covers.
+    if pc_ip not in manifest.load_manifest_at(config.TRAINING_LIVE).get("pcs", {}):
         return {"command": None}
     return {"command": _mirror_cmd(pc_ip, "deploy", config.TRAINING_LIVE)}
 
