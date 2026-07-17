@@ -29,6 +29,15 @@ type Agent struct {
 }
 
 func main() {
+	// `simagent.exe -install`: register the elevated logon task and exit (self-elevates
+	// via UAC the first time). Handled before anything else - it needs no config.
+	for _, arg := range os.Args[1:] {
+		if arg == "-install" || arg == "--install" || arg == "install" {
+			installTask()
+			return
+		}
+	}
+
 	cleanupOldBinary()              // remove leftover .old from a prior self-update
 	cfg := LoadConfig("agent.json") // optional; baked defaults fill the rest
 	resolveConfig(&cfg)

@@ -35,23 +35,27 @@ Guards like **Clock in sync**, **SSH open**, **Windows Update disabled** and **C
 temperatures** need an admin token (`Set-Date`, service control, the sensor driver). A
 bare `.exe` can't self-elevate without a UAC prompt every launch, so install the agent as
 a **scheduled task that starts at logon with highest privileges** — it gets a full admin
-token, no prompt, every time. One command does it (copy `deploy/install-agent.ps1` to the
-PC next to `simagent.exe`, then in an **elevated** PowerShell):
+token, no prompt, every time.
+
+The agent installs this itself — just run it once with `-install`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install-agent.ps1
+.\simagent.exe -install
 ```
 
-It copies the exe to `C:\sim-agent`, registers the `sim-agent` task, starts it, and prints
-who it's running as. Re-run it any time to update the task.
+The first time, it asks for administrator rights (**one UAC prompt**), then copies itself
+to `C:\sim-agent`, registers the `sim-agent` task, and starts it. From then on it launches
+elevated at every sign-in with no prompt. Re-run `-install` any time to re-register.
 
 The agent runs **as the logged-in user** (who must be a local admin), *not* as SYSTEM —
 deliberate: the notifications / recycle-bin / wallpaper guards write the console user's own
-registry hive, which a SYSTEM process would miss. If the user isn't a local admin the task
-still runs but without admin rights (the installer warns you).
+registry hive, which a SYSTEM process would miss.
+
+`deploy/install-agent.ps1` does the same thing from an elevated PowerShell if you'd rather
+script it (e.g. push it with your imaging tool); `-install` is the interactive path.
 
 For a quick one-off test without the task, just run it unelevated — deploy, import and
-GPU temps work; the admin-only guards will fail until you install the task:
+GPU temps work; the admin-only guards will fail until you install:
 
 ```powershell
 cd C:\sim-agent; .\simagent.exe
