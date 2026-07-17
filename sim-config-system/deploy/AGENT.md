@@ -29,38 +29,33 @@ override a default — e.g. `{"enforce_on_start": false}` for a passive agent du
 testing, or a `git_exe` path. Everything else is discovered; you never put the URL,
 token, or identity in a file.
 
-## 3. Run it
+## 3. Run it — always elevated (recommended)
+
+Guards like **Clock in sync**, **SSH open**, **Windows Update disabled** and **CPU
+temperatures** need an admin token (`Set-Date`, service control, the sensor driver). A
+bare `.exe` can't self-elevate without a UAC prompt every launch, so install the agent as
+a **scheduled task that starts at logon with highest privileges** — it gets a full admin
+token, no prompt, every time. One command does it (copy `deploy/install-agent.ps1` to the
+PC next to `simagent.exe`, then in an **elevated** PowerShell):
 
 ```powershell
-cd C:\sim-agent
-.\simagent.exe
+powershell -ExecutionPolicy Bypass -File install-agent.ps1
 ```
 
-### Running it elevated (needed for CPU temperatures)
+It copies the exe to `C:\sim-agent`, registers the `sim-agent` task, starts it, and prints
+who it's running as. Re-run it any time to update the task.
 
-Double-clicking or running it from a normal shell leaves the agent **unelevated**, and
-HealthCheck's CPU temperature stays empty: LibreHardwareMonitor reads MSRs through a
-kernel driver that only loads with an admin token. (Everything else — deploy, import,
-guards, GPU temps via nvidia-smi — works fine unelevated.)
+The agent runs **as the logged-in user** (who must be a local admin), *not* as SYSTEM —
+deliberate: the notifications / recycle-bin / wallpaper guards write the console user's own
+registry hive, which a SYSTEM process would miss. If the user isn't a local admin the task
+still runs but without admin rights (the installer warns you).
 
-Install it as a scheduled task that starts at logon with highest privileges. Run this
-**once per PC, from an elevated PowerShell**:
+For a quick one-off test without the task, just run it unelevated — deploy, import and
+GPU temps work; the admin-only guards will fail until you install the task:
 
 ```powershell
-$exe = 'C:\sim-agent\simagent.exe'
-$me  = "$env:USERDOMAIN\$env:USERNAME"
-Register-ScheduledTask -TaskName 'sim-agent' -Force `
-  -Action    (New-ScheduledTaskAction -Execute $exe) `
-  -Trigger   (New-ScheduledTaskTrigger -AtLogOn -User $me) `
-  -Principal (New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Highest) `
-  -Settings  (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0)
-Stop-Process -Name simagent -Force -ErrorAction SilentlyContinue
-Start-ScheduledTask -TaskName 'sim-agent'
+cd C:\sim-agent; .\simagent.exe
 ```
-
-It runs as the logged-in user (who must be a local admin), **not** as SYSTEM — deliberate:
-the notifications guard and other per-user settings write the console user's registry
-hive, which a SYSTEM-run agent would miss.
 
 It logs `agent ... started in state UNSEEDED` and heartbeats every 10s. Confirm
 it shows up online on the Pi:
