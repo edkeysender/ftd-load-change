@@ -122,7 +122,8 @@ tab.
 | Wake-on-LAN ready | NIC holding the coordinator-facing IP wakes on magic packet | ✅ (BIOS/UEFI wake is still manual) |
 | Windows Update disabled | the `NoAutoUpdate` / no-online-check **policies** (not the service — see below) | ✅ |
 | Notifications disabled | toasts, notification centre, tips, Defender alerts | ✅ |
-| Wallpaper | desktop/lock image is the standard | ✅ |
+| Windows activated | Windows reports a licensed state | — check only, activate by hand (key/KMS) |
+| Wallpaper and login image | one managed image on desktop + lock + sign-in; Spotlight and sign-in blur off (no three-image flash during login) | ✅ |
 | Git / SSH / VC++ | prerequisites present | ✅ |
 | Hardware sensors | a CPU temperature is readable (for HealthCheck) | ✅ (unpacks the LHM DLLs + installs the PawnIO driver) |
 

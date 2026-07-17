@@ -15,6 +15,13 @@
     "apply": "time-apply.ps1"
   },
   {
+    "id": "activation",
+    "name": "Windows activated",
+    "desc": "Windows reports a licensed (activated) state. Check only — activating needs a product key or KMS, done by hand.",
+    "assets": [],
+    "check": "activation-check.ps1"
+  },
+  {
     "id": "winupdate",
     "name": "Windows Update disabled",
     "desc": "No automatic updates: the NoAutoUpdate policy is set and the wuauserv service is disabled. A sim must never reboot or swap a driver mid-session.",
@@ -49,7 +56,7 @@
   {
     "id": "wallpaper",
     "name": "Wallpaper and login image",
-    "desc": "Desktop + lock-screen image matches the standard.",
+    "desc": "One managed image on the desktop, lock screen and sign-in prompt — Spotlight rotation and the sign-in blur turned off, so no other images flash during login.",
     "assets": ["wallpaper.png"],
     "check": "wallpaper-check.ps1",
     "apply": "wallpaper-apply.ps1"
