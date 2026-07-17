@@ -62,6 +62,14 @@
     "apply": "wallpaper-apply.ps1"
   },
   {
+    "id": "recyclebin",
+    "name": "Recycle Bin hidden",
+    "desc": "The Recycle Bin icon is hidden from the desktop, for a clean sim desktop. Applies at the next sign-in.",
+    "assets": [],
+    "check": "recyclebin-check.ps1",
+    "apply": "recyclebin-apply.ps1"
+  },
+  {
     "id": "git",
     "name": "Git for Windows",
     "desc": "Required for deploy (portable, includes git-lfs).",
