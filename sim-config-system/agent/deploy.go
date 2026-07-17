@@ -121,6 +121,26 @@ func gitCmd(cfg AgentConfig, args ...string) (string, error) {
 	return string(out), err
 }
 
+// clearStaleGitLocks removes leftover *.lock files from a git run that was killed - a PC
+// reset mid-deploy (or a crashed git) leaves e.g. .git/index.lock behind, and then every
+// future deploy fails with "Unable to create '.../index.lock': File exists". The agent is
+// the ONLY writer of this repo and runs its git ops one at a time, so any lock present when
+// a deploy starts is stale and safe to remove - there is never a legitimate concurrent git.
+func clearStaleGitLocks(cfg AgentConfig) {
+	gitDir := filepath.Join(cfg.RepoPath, ".git")
+	for _, name := range []string{"index.lock", "HEAD.lock", "config.lock", "shallow.lock", "packed-refs.lock"} {
+		p := filepath.Join(gitDir, name)
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			log.Printf("[deploy] could not remove stale git lock %s: %v", name, err)
+		} else {
+			log.Printf("[deploy] removed stale git lock %s (a previous git run was interrupted)", name)
+		}
+	}
+}
+
 // GitFetchCheckout ensures a sparse clone exists, fetches, and checks out `ref`
 // (a moving branch like training-live/dev, or an immutable tag). Only `folder`
 // is materialised (sparse cone), so each PC pulls only what it runs.
@@ -143,6 +163,10 @@ func GitFetchCheckout(cfg AgentConfig, folder, ref string) error {
 			return fmt.Errorf("sparse-checkout init: %v: %s", err, out)
 		}
 	}
+	// The repo exists now (pre-existing or just cloned). Drop any lock a killed git run
+	// left behind, so a PC that was reset mid-deploy can deploy again without a manual
+	// "remove index.lock". A fresh clone has none, so this is a no-op there.
+	clearStaleGitLocks(cfg)
 	// Configure Git LFS filters for this clone so large binaries materialize on
 	// checkout. Non-fatal: a PC without git-lfs / a config-only load still works.
 	if out, err := gitCmd(cfg, "lfs", "install", "--local"); err != nil {
