@@ -22,7 +22,9 @@ $STANDBY   = '29f6c1db-86da-48c5-9fdb-f2b67b1f44da'
 $HIBERNATE = '9d7815a6-7ee4-497e-8888-515a05f02364'
 $VIDEOIDLE = '3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e'
 $DISKIDLE  = '6738e2c4-e8a5-4a42-b16a-e040e769756e'
-$SIM_CLASSES = @('Net', 'USB', 'HIDClass', 'Mouse', 'Keyboard')
+# USB + input devices: MSPower_DeviceEnable is the real backing for these. NICs are
+# checked separately through the netadapter API (see below) - MSPower disagrees for them.
+$USB_CLASSES = @('USB', 'HIDClass', 'Mouse', 'Keyboard')
 
 # Returns @(acIndex, dcIndex) for a setting on the active scheme, or @($null,$null).
 function Get-Idx($sub, $setting) {
@@ -58,22 +60,32 @@ foreach ($s in @(@{N='sleep'; S=$SUB_SLEEP; G=$STANDBY}, @{N='hibernate'; S=$SUB
 $cls = @{}; $nm = @{}
 Get-CimInstance Win32_PnPEntity | ForEach-Object { $cls[$_.DeviceID] = $_.PNPClass; $nm[$_.DeviceID] = $_.Name }
 
-# The Wake-on-LAN NIC is NOT exempt. The old Device Manager UI greys out the wake options
-# when "allow the computer to turn off this device" is unchecked, which suggests wake
-# needs it - but that was tested on a real sim PC (Realtek PCIe 2.5GbE) by actually waking
-# the machine: WoL works fine with it unticked. So we hold every NIC to the same rule and
-# the wol guard does not assert this setting at all.
-
+# --- USB + input devices: MSPower_DeviceEnable.Enable is their real setting. ---
 # Enable = $true means "allow the computer to turn off this device to save power".
 $still = @(Get-CimInstance -Namespace root\wmi -ClassName MSPower_DeviceEnable |
-           Where-Object { $_.Enable -and $cls[($_.InstanceName -replace '_\d+$','')] -in $SIM_CLASSES })
+           Where-Object { $_.Enable -and $cls[($_.InstanceName -replace '_\d+$','')] -in $USB_CLASSES })
 if ($still.Count -gt 0) {
   # Name the devices, not their class - "USB, USB, USB" tells nobody what to go fix.
   $names = ($still | Select-Object -First 3 | ForEach-Object {
               $n = $nm[($_.InstanceName -replace '_\d+$','')]
               if ($n) { $n } else { $_.InstanceName } }) -join '; '
   $more = if ($still.Count -gt 3) { ", +$($still.Count - 3) more" } else { '' }
-  $bad += "$($still.Count) network/USB/input device(s) may still be powered down ($names$more)"
+  $bad += "$($still.Count) USB/input device(s) may still be powered down ($names$more)"
+}
+
+# --- NICs: check the SAME setting Device Manager and Set-NetAdapterPowerManagement use. ---
+# MSPower_DeviceEnable disagrees for network adapters - it reflects a different WMI view
+# that lags the real checkbox, and it enumerates ghost "#3"-style instances left by past
+# driver installs. So a NIC the operator (or power-apply) already disabled kept reading as
+# powered-down. Trust AllowComputerToTurnOffDevice on real, present adapters instead;
+# 'Unsupported' (no such knob) is fine, only 'Enabled' fails.
+$hotNics = @()
+foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Not Present' })) {
+  $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue
+  if ($pm -and $pm.AllowComputerToTurnOffDevice -eq 'Enabled') { $hotNics += $a.InterfaceDescription }
+}
+if ($hotNics.Count -gt 0) {
+  $bad += "$($hotNics.Count) NIC(s) may still be powered down ($($hotNics -join '; '))"
 }
 
 if ($bad.Count -eq 0) {
