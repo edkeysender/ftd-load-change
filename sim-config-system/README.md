@@ -190,6 +190,59 @@ charted beside a real one reads as a healthy chip.
 
 Enter your name (top-right) — it's recorded as the author of seals, promotes and dev builds.
 
+## Troubleshooting the coordinator
+
+The coordinator runs on the Pi as the systemd service **`sim-coordinator`** (port 8090,
+as root, no sandbox). Everything below is run on the Pi.
+
+**Dashboard won't load / `http://<pi-ip>:8090/` refuses the connection.** The service is
+down. Check it, then restart:
+
+```bash
+systemctl status sim-coordinator --no-pager | head -20   # Active: failed / inactive?
+sudo systemctl reset-failed sim-coordinator              # clear a start-limit lockout
+sudo systemctl restart sim-coordinator
+sudo ss -tlnp | grep 8090                                # confirm it's listening
+```
+
+**See why it died** — the Python traceback is in the journal:
+
+```bash
+sudo journalctl -u sim-coordinator -n 80 --no-pager
+```
+
+Common startup failures and what they mean:
+
+| Symptom in the journal | Cause | Fix |
+| --- | --- | --- |
+| `sqlite3.OperationalError: attempt to write a readonly database` | The filesystem holding `/var/lib/sim-config` was **read-only** when it started - usually a **transient** blip (NVMe/SD hiccup under heavy I/O), occasionally a full or failing disk. | Verify it's writable *now* (below); if so just `reset-failed` + `restart`. If a big disk copy is running, wait for it to finish first. |
+| `Start request repeated too quickly` / `status=... failed` and no traceback | The service crash-looped and systemd **gave up**. (The unit now sets `StartLimitIntervalSec=0` so it keeps retrying; older installs don't.) | `sudo systemctl reset-failed sim-coordinator && sudo systemctl restart sim-coordinator` |
+| `Address already in use` on port 8090 | Something else grabbed the port. | `sudo ss -tlnp | grep 8090` to find it; stop it or change `SIM_PORT` in `/etc/sim-config.env`. |
+| `ModuleNotFoundError` / `SyntaxError` in `coordinator/*.py` | A bad pull / broken venv. | `git -C /opt/ftd-load-change pull`, reinstall deps: `/opt/ftd-load-change/sim-config-system/.venv/bin/pip install -r coordinator/requirements.txt`, restart. |
+
+**Diagnose a "readonly database" — is the disk actually writable right now?**
+
+```bash
+mount | grep -E '\bro\b'                                  # any real fs mounted read-only?
+df -h /var/lib                                            # disk full?
+sudo touch /var/lib/sim-config/_t && sudo rm /var/lib/sim-config/_t && echo "WRITE OK"
+sudo dmesg | grep -iE 'read-only|ext4-fs error|I/O error|remount' | tail   # disk errors?
+```
+
+If `WRITE OK` and no fs shows `ro`, the fault was transient and already cleared - just
+`reset-failed` + `restart`. If a filesystem shows `ro`, remount it (`sudo mount -o
+remount,rw /`); if `dmesg` shows I/O errors, the underlying disk is failing - reimage/replace
+(the DB at `/var/lib/sim-config/coordinator.db` and the git clone both live there).
+
+**Applying pushed changes** (the running service does **not** hot-reload):
+
+- **Backend** (`coordinator/*.py`): `git pull` then `sudo systemctl restart sim-coordinator`.
+  Symptom of forgetting: a newly-added route returns 404.
+- **Frontend** (`coordinator/static/index.html`): just Ctrl-F5 in the browser - uvicorn
+  serves the file fresh, no restart needed.
+- **Agent** (`agent/*.go`): rebuild on the Pi with `sudo bash deploy/build-agent.sh`, then
+  *Update all agents* in the dashboard (agents self-update).
+
 ## Agent startup / reboot behaviour
 
 **Sync is on-demand only.** The agent NEVER resyncs or launches on start — for a

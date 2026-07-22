@@ -88,6 +88,12 @@ WorkingDirectory=$REPO_DIR
 EnvironmentFile=$ENV_FILE
 ExecStart=$REPO_DIR/.venv/bin/uvicorn coordinator.main:app --host 0.0.0.0 --port $PORT
 Restart=on-failure
+# Keep retrying through a transient fault (e.g. a filesystem that briefly
+# remounts read-only under heavy I/O). Without this, 5 fast crashes trip
+# systemd's default start-limit and the service stays dead until a manual
+# restart - turning a momentary blip into a multi-hour outage.
+RestartSec=5
+StartLimitIntervalSec=0
 
 [Install]
 WantedBy=multi-user.target

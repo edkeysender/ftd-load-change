@@ -23,8 +23,13 @@ $did += 'policy: no automatic updates, no online update check, no driver updates
 # Best effort - Windows restores this at boot, which is why the check ignores it.
 Stop-Service -Name wuauserv -Force
 Set-Service -Name wuauserv -StartupType Disabled
+# Recovery tab -> all three failure actions to "Take No Action". Belt-and-braces only:
+# this stops the SCM restarting wuauserv if it *crashes*, not the Update Medic Service
+# (WaaSMedicSvc) that re-enables it at boot - so, like the disable above, it is not
+# enforced by the check. `sc.exe`, not the `sc` PowerShell alias (= Set-Content).
+& sc.exe failure wuauserv reset= 0 actions= '""' | Out-Null
 $svc = (Get-CimInstance Win32_Service -Filter "Name='wuauserv'").StartMode
-$did += "wuauserv stopped (startup=$svc; Windows may re-enable it at boot - the policy is what holds)"
+$did += "wuauserv stopped, startup=$svc, recovery=take-no-action (Windows may re-enable it at boot - the policy is what holds)"
 
 $edition = (Get-CimInstance Win32_OperatingSystem).Caption
 if ($edition -match 'Home') {
