@@ -243,6 +243,38 @@ remount,rw /`); if `dmesg` shows I/O errors, the underlying disk is failing - re
 - **Agent** (`agent/*.go`): rebuild on the Pi with `sudo bash deploy/build-agent.sh`, then
   *Update all agents* in the dashboard (agents self-update).
 
+### Forgejo (git host on port 3000) won't load
+
+Forgejo runs as a **Docker container** (`forgejo`, started with `--restart unless-stopped`
+by `deploy/forgejo-setup.sh`), so **the Docker daemon must be running** for it — and for
+deploy/capture/dev, which pull from it. If `http://<pi-ip>:3000/` refuses the connection,
+the container (or Docker itself) is down. A transient read-only-filesystem blip (see the
+`readonly database` row above) can leave `dockerd` **`failed`** even after the disk
+recovers, which takes Forgejo with it.
+
+```bash
+systemctl is-active docker                 # want: active. "failed"/"inactive" => start it
+sudo systemctl start docker
+sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'   # forgejo should be Up
+sudo ss -tlnp | grep 3000                   # confirm it's listening
+```
+
+Once Docker is active the `forgejo` container comes back on its own (`--restart
+unless-stopped`); give it ~10s. If it doesn't:
+
+```bash
+sudo journalctl -u docker -n 50 --no-pager  # why the daemon won't start
+sudo docker start forgejo                    # start the container by hand
+sudo docker logs --tail 50 forgejo           # why the container exited
+```
+
+Notes:
+- Run `docker` with **`sudo`** unless your user is in the `docker` group - otherwise you get
+  `permission denied ... /var/run/docker.sock`.
+- Make sure Docker starts at boot so this survives a reboot: `sudo systemctl enable docker`.
+- Forgejo's data lives in a Docker volume, so restarting the container does not lose repos,
+  tags or the token.
+
 ## Agent startup / reboot behaviour
 
 **Sync is on-demand only.** The agent NEVER resyncs or launches on start — for a
