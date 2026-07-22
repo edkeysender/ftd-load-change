@@ -431,6 +431,67 @@ let FLEET_OPEN = new Set();   // pc_ip currently expanded
 let FLEET_RANGE = 30;         // temperature-chart span, days
 let fleetHist = {};           // pc_ip -> /health/history result (fetched on expand)
 let fleetHtml = '';           // repaint only on change, so open charts don't flicker
+let fleetView = {};           // pc_ip -> {t0,t1} visible time window; absent = full fetched range
+
+// --- temperature chart: scroll to zoom the time axis, drag to pan ---
+// The full range is already fetched (per the History selector); zoom/pan just re-window
+// the points we have, no refetch. renderChart repaints one chart in place so the rest of
+// the row doesn't flicker; fleetView[ip] persists across full repaints (healthChart reads it).
+function chartInner(ip) {
+  const h = fleetHist[ip];
+  if (h === undefined) return '<div class="muted" style="font-size:11px;padding:6px 0">Loading history…</div>';
+  const zoomed = !!fleetView[ip];
+  return `<div style="display:flex;align-items:center;gap:8px;margin:0 0 3px">
+      <span class="muted" style="font-size:10px">Scroll to zoom · drag to pan${zoomed ? '' : ' · showing full range'}</span>
+      ${zoomed ? `<a href="#" onclick="resetChart('${ip}');return false" style="font-size:10px">Reset zoom</a>` : ''}
+    </div>${healthChart(h, fleetView[ip], ip)}`;
+}
+function renderChart(ip) {
+  const el = document.getElementById('chart-' + ip);
+  if (el) el.innerHTML = chartInner(ip);
+}
+function resetChart(ip) { delete fleetView[ip]; renderChart(ip); }
+function chartBounds(ip) {
+  const pts = (fleetHist[ip] || {}).points || [];
+  if (!pts.length) return null;
+  return { t0: pts[0].t, t1: Math.max(pts[pts.length - 1].t, pts[0].t + 1) };
+}
+// Fraction (0..1) across the plot area for a client-X, matching healthChart's viewBox geometry.
+function plotFrac(el, clientX) {
+  const r = el.getBoundingClientRect(), W = 900, L = 30, R = 6;
+  const svgX = ((clientX - r.left) / r.width) * W;
+  return Math.min(1, Math.max(0, (svgX - L) / (W - L - R)));
+}
+function chartWheel(ip, e) {
+  const b = chartBounds(ip); if (!b) return;
+  e.preventDefault();
+  const v = fleetView[ip] || { t0: b.t0, t1: b.t1 }, span = v.t1 - v.t0;
+  const frac = plotFrac(e.currentTarget, e.clientX), cursorT = v.t0 + frac * span;
+  const maxSpan = b.t1 - b.t0, minSpan = Math.min(maxSpan, 5 * 60);      // floor at 5 minutes
+  let newSpan = Math.min(maxSpan, Math.max(minSpan, span * (e.deltaY < 0 ? 0.8 : 1.25)));
+  let t0 = cursorT - frac * newSpan, t1 = t0 + newSpan;
+  if (t0 < b.t0) { t0 = b.t0; t1 = t0 + newSpan; }
+  if (t1 > b.t1) { t1 = b.t1; t0 = t1 - newSpan; }
+  if (newSpan >= maxSpan) delete fleetView[ip]; else fleetView[ip] = { t0: Math.max(b.t0, t0), t1 };
+  renderChart(ip);
+}
+let chartDrag = null;
+function chartDown(ip, e) {
+  const b = chartBounds(ip); if (!b || !fleetView[ip]) return;                // only pan when zoomed in
+  e.preventDefault();
+  chartDrag = { ip, x: e.clientX, w: e.currentTarget.getBoundingClientRect().width, b };
+}
+window.addEventListener('mousemove', e => {
+  if (!chartDrag) return;
+  const d = chartDrag, v = fleetView[d.ip]; if (!v) return;
+  const W = 900, L = 30, R = 6, span = v.t1 - v.t0;
+  const dt = -(((e.clientX - d.x) / d.w) * W / (W - L - R)) * span;
+  let t0 = v.t0 + dt, t1 = v.t1 + dt;
+  if (t0 < d.b.t0) { t0 = d.b.t0; t1 = t0 + span; }
+  if (t1 > d.b.t1) { t1 = d.b.t1; t0 = t1 - span; }
+  fleetView[d.ip] = { t0, t1 }; d.x = e.clientX; renderChart(d.ip);
+});
+window.addEventListener('mouseup', () => { chartDrag = null; });
 
 // The PC set: every manifest PC + every computer with an agent, minus dismissed ones —
 // same rule the old PC status grid used.
@@ -448,6 +509,7 @@ function fleetRows(pcs, agents) {
 function setFleetRange(v) {
   FLEET_RANGE = parseFloat(v) || 30;
   fleetHist = {};
+  fleetView = {};                    // a new span invalidates any zoom windows
   FLEET_OPEN.forEach(fetchFleetHist);
   renderFleet(MANIFEST, LAST_AGENTS);
 }
@@ -457,6 +519,7 @@ function toggleFleet(ip) {
   renderFleet(MANIFEST, LAST_AGENTS);
 }
 async function fetchFleetHist(ip) {
+  delete fleetView[ip];              // fresh data -> reset to full range
   fleetHist[ip] = await safe(api('GET', '/health/history?pc=' + encodeURIComponent(ip) + '&days=' + FLEET_RANGE)) || { points: [] };
   if (FLEET_OPEN.has(ip)) { fleetHtml = ''; renderFleet(MANIFEST, LAST_AGENTS); }
 }
@@ -548,7 +611,9 @@ function fleetRow(p, a, guardCount) {
   return summary + `<tr class="fleet-detail"><td colspan="6"><div class="fleet-detail-inner">
     <div style="flex:1 1 340px">${fleetHardware(h, fleetHist[ip])}</div>
     <div style="flex:1 1 300px">${fleetChecks(ip, guardCount)}</div>
-  </div></td></tr>`;
+  </div>
+  <div id="chart-${ip}" style="margin-top:14px">${chartInner(ip)}</div>
+  </td></tr>`;
 }
 
 // Hardware & temperature panel for the expanded row.
@@ -571,9 +636,6 @@ function fleetHardware(p, hist) {
     return `<div class="temptile${isHot ? ' hot' : ''}"><div class="muted" style="font-size:11px">${label}${stale}</div>
       <div>${tempTxt(v, kind, src)}</div>${minmax(kind)}${hotNote}</div>`;
   };
-  const chart = hist === undefined
-    ? '<div class="muted" style="font-size:11px;padding:6px 0">Loading history…</div>'
-    : healthChart(hist);
   const note = p.note ? `<div class="hint" style="margin:8px 0 0;color:#99641a">${esc(p.note)}</div>` : '';
   // Last sample time + a manual "sample now" icon (agents otherwise sample every 5 min).
   const updated = p.temp_at
@@ -587,7 +649,7 @@ function fleetHardware(p, hist) {
     <div style="margin-bottom:8px">${kv('BIOS', bios)}${kv('CPU', esc(p.cpu_name || '—'))}${kv('GPU', esc(p.gpu_name || '—'))}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       ${tile('CPU temp', p.cpu_c, 'cpu', p.cpu_src)}${tile('GPU temp', p.gpu_c, 'gpu', p.gpu_src)}</div>
-    ${chart}${note}`;
+    ${note}`;
 }
 
 // Per-PC configuration checks (the guards) for the expanded row.
@@ -1000,20 +1062,28 @@ function tempTxt(v, kind, src) {
 
 
 // Inline SVG line chart — two series (CPU/GPU), average drawn solid with the
-// bucket's max behind it faintly, so a short spike isn't averaged away.
-function healthChart(h) {
+// bucket's max behind it faintly, so a short spike isn't averaged away. `view`
+// (optional {t0,t1}) is the visible window when zoomed; scroll/drag adjust it.
+function healthChart(h, view, ip) {
   const pts = (h && h.points) || [];
-  const vals = [];
-  pts.forEach(p => ['cpu_avg', 'cpu_max', 'gpu_avg', 'gpu_max'].forEach(k => { if (p[k] != null) vals.push(p[k]); }));
+  if (!pts.length) return '<div class="muted" style="font-size:11px;padding:6px 0">No temperature history for this range yet.</div>';
+  // Tall, full-width chart. viewBox scales to the container; height rides along.
+  const W = 900, H = 300, L = 34, R = 8, T = 10, B = 22;
+  const dataT0 = pts[0].t, dataT1 = Math.max(pts[pts.length - 1].t, dataT0 + 1);
+  const t0 = view ? Math.max(dataT0, view.t0) : dataT0;
+  const t1 = view ? Math.min(dataT1, view.t1) : dataT1;
+  // Y-scale from the *visible* window, so zooming in fills the vertical space.
+  const vis = pts.filter(p => p.t >= t0 && p.t <= t1);
+  const scale = vis.length ? vis : pts, vals = [];
+  scale.forEach(p => ['cpu_avg', 'cpu_max', 'gpu_avg', 'gpu_max'].forEach(k => { if (p[k] != null) vals.push(p[k]); }));
   if (!vals.length) return '<div class="muted" style="font-size:11px;padding:6px 0">No temperature history for this range yet.</div>';
-  const W = 900, H = 132, L = 30, R = 6, T = 8, B = 18;
-  const t0 = pts[0].t, t1 = Math.max(pts[pts.length - 1].t, t0 + 1);
   let lo = Math.floor((Math.min(...vals) - 3) / 10) * 10, hi = Math.ceil((Math.max(...vals) + 3) / 10) * 10;
   if (hi - lo < 20) hi = lo + 20;
   const x = t => L + ((t - t0) / (t1 - t0)) * (W - L - R);
   const y = v => (H - B) - ((v - lo) / (hi - lo)) * (H - B - T);
   const bucket = (h && h.bucket) || 300;
   // Break the line across gaps (PC powered off) instead of drawing through them.
+  // All points are drawn; a clip-path trims whatever falls outside the window.
   const path = key => {
     let d = '', prev = null;
     pts.forEach(p => {
@@ -1025,25 +1095,32 @@ function healthChart(h) {
     return d.trim();
   };
   let grid = '';
-  for (let i = 0; i <= 2; i++) {
-    const v = lo + (hi - lo) * i / 2, yy = y(v).toFixed(1);
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, yy = y(v).toFixed(1);
     grid += `<line x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}" stroke="#ece9e0"/>` +
-            `<text x="${L - 4}" y="${(+yy + 3).toFixed(1)}" text-anchor="end" font-size="9" fill="#8a8578">${v.toFixed(0)}</text>`;
+            `<text x="${L - 5}" y="${(+yy + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="#8a8578">${v.toFixed(0)}</text>`;
   }
-  const when = t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  // Below ~2 days include the time; otherwise just the date.
+  const span = t1 - t0, withTime = span < 2 * 86400;
+  const when = t => { const d = new Date(t * 1000); return withTime
+    ? d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
   const series = (key, color) =>
     `<path d="${path(key + '_max')}" fill="none" stroke="${color}" stroke-width="1" opacity="0.28"/>` +
     `<path d="${path(key + '_avg')}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+  const cid = 'clip-' + ip;
+  const cursor = view ? 'grab' : 'ew-resize';
   // Uniform scaling (no preserveAspectRatio="none") — stretching the viewBox to a
   // fixed height would squash the axis labels along with the lines.
-  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;cursor:${cursor};user-select:none;touch-action:none"
+      onwheel="chartWheel('${ip}',event)" onmousedown="chartDown('${ip}',event)">
+    <defs><clipPath id="${cid}"><rect x="${L}" y="${T}" width="${W - L - R}" height="${H - B - T}"/></clipPath></defs>
     ${grid}
-    ${series('cpu', '#c0392b')}
-    ${series('gpu', '#2c6fbb')}
-    <text x="${L}" y="${H - 5}" font-size="9" fill="#8a8578">${when(t0)}</text>
-    <text x="${W - R}" y="${H - 5}" text-anchor="end" font-size="9" fill="#8a8578">${when(t1)}</text>
-    <text x="${W / 2 - 30}" y="${H - 5}" font-size="9" fill="#c0392b">— CPU</text>
-    <text x="${W / 2 + 12}" y="${H - 5}" font-size="9" fill="#2c6fbb">— GPU</text>
+    <g clip-path="url(#${cid})">${series('cpu', '#c0392b')}${series('gpu', '#2c6fbb')}</g>
+    <text x="${L}" y="${H - 6}" font-size="10" fill="#8a8578">${when(t0)}</text>
+    <text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="10" fill="#8a8578">${when(t1)}</text>
+    <text x="${W / 2 - 34}" y="${H - 6}" font-size="10" fill="#c0392b">— CPU</text>
+    <text x="${W / 2 + 14}" y="${H - 6}" font-size="10" fill="#2c6fbb">— GPU</text>
   </svg>`;
 }
 
