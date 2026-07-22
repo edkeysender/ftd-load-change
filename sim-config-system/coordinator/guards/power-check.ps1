@@ -79,8 +79,13 @@ if ($still.Count -gt 0) {
 # driver installs. So a NIC the operator (or power-apply) already disabled kept reading as
 # powered-down. Trust AllowComputerToTurnOffDevice on real, present adapters instead;
 # 'Unsupported' (no such knob) is fine, only 'Enabled' fails.
+#
+# Only enforce on adapters that are actually Up (carrying the link). A Disconnected or
+# Disabled radio powering down cannot interrupt a session, and boxes with a multi-radio
+# Wi-Fi card expose several idle instances that read 'Enabled' and can never be satisfied
+# (e.g. a wired sim PC with an unused Wi-Fi 7 card showing three disconnected radios).
 $hotNics = @()
-foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -ne 'Not Present' })) {
+foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
   $pm = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue
   if ($pm -and $pm.AllowComputerToTurnOffDevice -eq 'Enabled') { $hotNics += $a.InterfaceDescription }
 }
