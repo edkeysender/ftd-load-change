@@ -4,6 +4,7 @@ The coordinator is the single git writer and the orchestration brain. Agents are
 read-only git clients that poll /agents/{ip}/commands and post results.
 """
 import base64
+import hmac
 import json
 import socket
 import subprocess
@@ -15,7 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header, Body, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from . import config, db, discovery, git_ops, manifest
+from . import config, db, discovery, git_ops, manifest, secretbox, ssh_ops
+from .ssh_transport import SSHError
 
 # In-flight filesystem-browse requests: req_id -> {"event": Event, "result": dict}
 _browse_requests: dict = {}
@@ -65,7 +67,11 @@ def dashboard():
 @app.get("/config")
 def ui_config():
     return {"forgejo_url": config.FORGEJO_URL,
-            "training_live": config.TRAINING_LIVE, "dev_branch": config.DEV_BRANCH}
+            "training_live": config.TRAINING_LIVE, "dev_branch": config.DEV_BRANCH,
+            # Lets the dashboard disable "remember password" with an explanation instead
+            # of offering it and failing, and know whether to prompt for the operator token.
+            "secret_key": secretbox.available(),
+            "operator_token_required": bool(config.OPERATOR_TOKEN)}
 
 
 @app.get("/manifest/pcs")
@@ -99,26 +105,38 @@ def manifest_raw_save(req: ManifestRaw):
         data = _yaml.safe_load(req.yaml)
     except Exception as e:
         raise HTTPException(400, f"YAML parse error: {e}")
-    if not isinstance(data, dict) or not isinstance(data.get("pcs"), dict):
-        raise HTTPException(400, "manifest must be a mapping with a 'pcs' mapping")
-    for ip, spec in data["pcs"].items():
-        if not isinstance(spec, dict) or "folder" not in spec:
-            raise HTTPException(400, f"pc {ip}: missing 'folder'")
-        if not isinstance(spec.get("apps") or {}, dict):
-            raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
+    # Same validation as the UI builder path: the raw editor is exactly where someone
+    # would hand-write a dangerous SSH live path.
+    warnings = _validate_manifest(data)
     git_ops.commit_manifest(req.yaml)
     db.set_meta("manifest_saved_at", time.time())  # a dev version re-imports fresh content
-    return {"ok": True, "pcs": list(data["pcs"].keys())}
+    return {"ok": True, "pcs": list(data["pcs"].keys()), "warnings": warnings}
 
 
 def _validate_manifest(data):
+    """Structural checks plus, for SSH devices, the live-path safety rules.
+
+    Deploying to an SSH device mirrors WITH DELETIONS as root, so a bad `live` path is
+    caught here — at the point it is written — as well as again before the first delete.
+    Returns a list of non-fatal warnings.
+    """
     if not isinstance(data, dict) or not isinstance(data.get("pcs"), dict):
         raise HTTPException(400, "manifest must be a mapping with a 'pcs' mapping")
+    warnings = []
     for ip, spec in data["pcs"].items():
         if not isinstance(spec, dict) or "folder" not in spec:
             raise HTTPException(400, f"pc {ip}: missing 'folder'")
         if not isinstance(spec.get("apps") or {}, dict):
             raise HTTPException(400, f"pc {ip}: 'apps' must be a mapping")
+        transport = (spec.get("transport") or "agent").strip().lower()
+        if transport not in ("agent", "ssh"):
+            raise HTTPException(400, f"pc {ip}: transport must be 'agent' or 'ssh'")
+        if transport == "ssh":
+            try:
+                warnings += ssh_ops.validate_manifest_pc(ip, spec)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+    return warnings
 
 
 @app.get("/manifest/json")
@@ -131,11 +149,11 @@ def manifest_json():
 def manifest_json_save(body: dict = Body(...)):
     """Persist a manifest built by the UI (file browser). Dumped to YAML and
     committed to dev (comments not preserved — use the raw editor to keep them)."""
-    _validate_manifest(body)
+    warnings = _validate_manifest(body)
     git_ops.commit_manifest(
         yaml.safe_dump(body, sort_keys=False, default_flow_style=False, allow_unicode=True))
     db.set_meta("manifest_saved_at", time.time())  # a dev version re-imports fresh content
-    return {"ok": True, "pcs": list(body["pcs"].keys())}
+    return {"ok": True, "pcs": list(body["pcs"].keys()), "warnings": warnings}
 
 
 @app.get("/manifest/at")
@@ -158,6 +176,15 @@ def _startup():
             config.GLOBAL_IGNORE.write_text(config.SEED_GLOBAL_IGNORE.read_text())
     except Exception:
         pass
+    # Agentless Linux devices have no heartbeat, so the coordinator polls them instead.
+    # Assumes ONE coordinator process (pi-setup.sh runs uvicorn without --workers); with
+    # N workers you would get N pollers, just as you would get N command queues.
+    ssh_ops.start_poller()
+
+
+@app.on_event("shutdown")
+def _shutdown():
+    ssh_ops.shutdown()
 
 
 @app.get("/global-ignore")
@@ -192,6 +219,33 @@ def global_ignore_put(req: GlobalIgnoreReq):
 def _auth(token: str | None):
     if token != f"Bearer {config.AGENT_TOKEN}":
         raise HTTPException(401, "bad agent token")
+
+
+def _operator_auth(token: str | None):
+    """Guard the SSH surface: enrolling a Linux device, and browsing/diffing one as root.
+
+    The rest of the operator API is unauthenticated by design on a trusted LAN, but these
+    routes accept a root password and expose a device's whole filesystem, so they are not.
+    When no token is configured they refuse service rather than allowing access — failing
+    closed, so a half-finished setup can't silently leave this wide open.
+    """
+    if not config.OPERATOR_TOKEN:
+        raise HTTPException(503, "SIM_OPERATOR_TOKEN is not configured on the coordinator; "
+                                 "re-run deploy/pi-setup.sh to generate one")
+    if not token or not hmac.compare_digest(token, config.OPERATOR_TOKEN):
+        raise HTTPException(401, "bad or missing operator token")
+
+
+def _ssh_guard(pc_ip: str, token: str | None) -> bool:
+    """True if this PC is an SSH device (and the caller is authorised to act on it)."""
+    if not ssh_ops.is_ssh(pc_ip):
+        return False
+    _operator_auth(token)
+    return True
+
+
+def _ssh_error(e: Exception):
+    return HTTPException(502, str(e) or e.__class__.__name__)
 
 
 @app.get("/whoami")
@@ -233,8 +287,16 @@ def _enqueue_deploy_all():
     for ip in ips:
         _deploy_progress[ip] = {"state": "syncing", "at": now,
                                 "expected": _last_deploy_dur.get(ip)}  # None until first timing
+    # Split by transport, using the manifest OF THE REF being deployed so a PC that
+    # changed transport between versions is reached the way that version expects.
+    ssh_ips = [ip for ip in ips if manifest.pc_transport(ip, ref) == "ssh"]
     for ip in ips:
+        if ip in ssh_ips:
+            continue
         manifest.enqueue(ip, _mirror_cmd(ip, "deploy", ref))
+    # An agentless device has nothing to pop a command, so the coordinator does the
+    # mirroring itself, on its own threads.
+    ssh_ops.deploy_async_all(ssh_ips, ref)
 
 
 # ===================== UI / operator endpoints ==========================
@@ -252,7 +314,9 @@ def pcs():
         a["error"] = _agent_errors.get(a["pc_ip"])  # last failure message, if any
     return {"agents": agents, "dev_lock": db.lock_holder(),
             "capture_progress": _capture_progress, "dismissed": db.list_dismissed(),
-            "deploy_progress": dp_view}
+            "deploy_progress": dp_view,
+            # Connection details for agentless Linux devices (never includes secrets).
+            "ssh": ssh_ops.device_view()}
 
 
 @app.get("/versions")
@@ -330,11 +394,116 @@ def hosts():
     return {"hosts": listed}
 
 
+# ---- agentless Linux devices (SSH) --------------------------------------
+# All of these are guarded by _operator_auth: they take a root password and expose a
+# device's whole filesystem, which is a different risk class from the rest of this API.
+class SshEnrollReq(BaseModel):
+    ip: str
+    port: int = 22
+    user: str = "root"
+    password: str
+    remember: bool = False
+    label: str | None = None
+
+
+class SshTestReq(BaseModel):
+    ip: str
+    port: int = 22
+    user: str = "root"
+    password: str | None = None
+
+
+class SshKeyReq(BaseModel):
+    password: str | None = None
+
+
+@app.get("/ssh-devices")
+def ssh_devices(x_operator_token: str | None = Header(None)):
+    _operator_auth(x_operator_token)
+    return {"devices": ssh_ops.device_view()}
+
+
+@app.post("/ssh-devices/test")
+def ssh_devices_test(req: SshTestReq, x_operator_token: str | None = Header(None)):
+    """Try a connection before committing to enrollment ('Test connection' in the form).
+    Accepts a not-yet-enrolled host, so nothing is stored either way."""
+    _operator_auth(x_operator_token)
+    try:
+        if db.ssh_device(req.ip) and not req.password:
+            return ssh_ops.test(req.ip)
+        from . import ssh_transport
+        return ssh_transport.probe(req.ip, req.port, req.user,
+                                   password=req.password, accept_new=True)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.post("/ssh-devices")
+def ssh_devices_add(req: SshEnrollReq, x_operator_token: str | None = Header(None)):
+    """Enrol a Linux device: verify the password, install a dedicated key, and record it.
+
+    Adding it to the manifest is a separate step (the file browser), so a device can be
+    browsed before deciding which directories it should carry.
+    """
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.enroll(req.ip, req.port, req.user, req.password,
+                              remember=req.remember, label=req.label)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.post("/ssh-devices/{pc_ip}/test")
+def ssh_device_test(pc_ip: str, x_operator_token: str | None = Header(None)):
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.test(pc_ip)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.post("/ssh-devices/{pc_ip}/reinstall-key")
+def ssh_device_reinstall_key(pc_ip: str, req: SshKeyReq | None = None,
+                             x_operator_token: str | None = Header(None)):
+    """Re-install our key — for a device whose authorized_keys was wiped or reimaged."""
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.reinstall_key(pc_ip, req.password if req else None)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.delete("/ssh-devices/{pc_ip}")
+def ssh_device_delete(pc_ip: str, x_operator_token: str | None = Header(None)):
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.forget(pc_ip)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.get("/ssh-devices/{pc_ip}/deploy-preview")
+def ssh_device_preview(pc_ip: str, ref: str | None = None,
+                       x_operator_token: str | None = Header(None)):
+    """Dry run of a deploy: what would be copied and what would be DELETED. Worth
+    looking at before the first deploy to a device, since the mirror runs as root."""
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.preview(pc_ip, ref)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
 @app.post("/import/{pc}")
-def import_pc(pc: str):
+def import_pc(pc: str, x_operator_token: str | None = Header(None)):
     """Bootstrap: queue a read-only import. The agent walks its live dirs, applies
     excludes, and uploads the tree to /agents/{pc}/import-result. Nothing on the
-    PC is modified."""
+    PC is modified. For an SSH device the coordinator does the walking itself."""
+    if _ssh_guard(pc, x_operator_token):
+        try:
+            return ssh_ops.start_import(pc)
+        except SSHError as e:
+            raise _ssh_error(e)
     apps = manifest.resolved_apps(pc)
     if not apps:
         raise HTTPException(400, f"{pc} has no folders selected — nothing to import")
@@ -344,8 +513,13 @@ def import_pc(pc: str):
 
 
 @app.post("/import/{pc}/size-report")
-def size_report(pc: str):
+def size_report(pc: str, x_operator_token: str | None = Header(None)):
     folder = manifest.pc_folder(pc)
+    if _ssh_guard(pc, x_operator_token):
+        try:
+            return ssh_ops.size_report(pc)
+        except SSHError as e:
+            raise _ssh_error(e)
     manifest.enqueue(pc, {"type": "size_report", "folder": folder,
                           "apps": manifest.resolved_apps(pc)})
     return {"queued": True, "folder": folder}
@@ -523,6 +697,7 @@ def guard_check(req: GuardReq):
 
 @app.post("/guard/apply")
 def guard_apply(req: GuardReq):
+    _agent_only(req.pc, "configuration guards (they are Windows PowerShell checks)")
     item = next((x for x in _load_guards() if x["id"] == req.id), None)
     if not item:
         raise HTTPException(404, "unknown guard")
@@ -535,6 +710,7 @@ def guard_apply(req: GuardReq):
 @app.post("/guard/check-all")
 def guard_check_all(payload: dict = Body(...)):
     pc = payload.get("pc")
+    _agent_only(pc, "configuration guards (they are Windows PowerShell checks)")
     for item in _load_guards():
         manifest.enqueue(pc, _guard_cmd(item, "check"))
     return {"queued": True, "count": len(_load_guards())}
@@ -568,19 +744,32 @@ def agent_binary(authorization: str | None = Header(None)):
                         media_type="application/octet-stream")
 
 
+def _agent_only(pc_ip: str, what: str):
+    """Reject an agent-specific action aimed at an SSH device.
+
+    Not just tidiness: the command queue is in-memory and nothing ever drains it for a
+    device with no agent, so a queued command would leak for the life of the process.
+    """
+    if ssh_ops.is_ssh(pc_ip):
+        raise HTTPException(400, f"{what} is not supported for SSH devices ({pc_ip})")
+
+
 @app.post("/agents/{pc_ip}/update")
 def agent_update(pc_ip: str):
     """Mark an agent to self-update. It checks this at startup (before sync) and
     on each poll, updates + relaunches, then acks to clear the flag."""
+    _agent_only(pc_ip, "agent self-update")
     _update_pending.add(pc_ip)
     return {"requested": True}
 
 
 @app.post("/agents/update")
 def agents_update_all():
-    """Mark every PC in the manifest to self-update."""
+    """Mark every PC in the manifest to self-update. SSH devices run no agent binary,
+    so they're skipped."""
     for ip in manifest.load_manifest()["pcs"]:
-        _update_pending.add(ip)
+        if not ssh_ops.is_ssh(ip):
+            _update_pending.add(ip)
     return {"requested": True}
 
 
@@ -588,6 +777,7 @@ def agents_update_all():
 def agent_forget(pc_ip: str):
     """Drop a PC's agent record from PC status. If that PC's agent is still alive
     it re-registers on its next heartbeat (~10s); stale/renamed IPs stay gone."""
+    _agent_only(pc_ip, "removing from the list (use 'Remove device' instead)")
     db.forget_agent(pc_ip)
     return {"forgotten": pc_ip}
 
@@ -596,6 +786,7 @@ def agent_forget(pc_ip: str):
 def agent_shutdown(pc_ip: str):
     """Queue a force shutdown (shutdown /s /f /t 0) on that PC's agent. The agent
     must be online to pick it up; it powers off within a heartbeat."""
+    _agent_only(pc_ip, "remote shutdown")
     manifest.enqueue(pc_ip, {"type": "shutdown"})
     return {"ok": True, "pc_ip": pc_ip}
 
@@ -605,6 +796,7 @@ def agent_health_refresh(pc_ip: str):
     """Ask a PC's agent to sample its sensors NOW instead of waiting for the 5-minute
     loop (the dashboard's manual temperature refresh). The new reading lands within a
     few seconds via the normal /agents/{ip}/health post."""
+    _agent_only(pc_ip, "hardware/temperature monitoring")
     manifest.enqueue(pc_ip, {"type": "health"})
     return {"ok": True, "pc_ip": pc_ip}
 
@@ -628,6 +820,7 @@ def _send_wol(mac: str):
 def agent_wake(pc_ip: str):
     """Wake a powered-off PC by its last-known MAC. Needs the agent to have
     checked in (or LAN discovery to have seen it) at least once."""
+    _agent_only(pc_ip, "wake-on-LAN")
     mac = db.agent_mac(pc_ip)
     if not mac:
         raise HTTPException(400, "no MAC on record for this PC yet — it must check in "
@@ -661,7 +854,12 @@ class DevStartReq(BaseModel):
 def dev_start(req: DevStartReq):
     if not db.acquire_lock(req.user):
         raise HTTPException(409, f"dev session held by {db.lock_holder()}")
-    manifest.enqueue_all(lambda ip: _mirror_cmd(ip, "track", config.DEV_BRANCH))
+    # Not enqueue_all: an SSH device has no agent to pop the command, so it would sit in
+    # the in-memory queue forever. Files-only devices have no live-tracking mode anyway —
+    # deploy the dev version to them explicitly instead.
+    for ip in manifest.load_manifest()["pcs"]:
+        if not ssh_ops.is_ssh(ip):
+            manifest.enqueue(ip, _mirror_cmd(ip, "track", config.DEV_BRANCH))
     return {"locked_by": req.user}
 
 
@@ -757,9 +955,14 @@ class CaptureReq(BaseModel):
 
 
 @app.post("/dev/capture")
-def dev_capture(req: CaptureReq):
+def dev_capture(req: CaptureReq, x_operator_token: str | None = Header(None)):
     if not db.lock_holder():
         raise HTTPException(409, "no active dev session")
+    if _ssh_guard(req.pc, x_operator_token):
+        try:
+            return ssh_ops.start_capture(req.pc, author=db.lock_holder() or "dev")
+        except SSHError as e:
+            raise _ssh_error(e)
     manifest.enqueue(req.pc, {"type": "capture", "ref": config.DEV_BRANCH,
                               "folder": manifest.pc_folder(req.pc),
                               "apps": manifest.resolved_apps(req.pc),
@@ -831,6 +1034,8 @@ def health():
     pcs = []
     for a in db.list_agents():
         ip = a["pc_ip"]
+        if a.get("kind") == "ssh":
+            continue  # no sensor telemetry from an agentless device; keep this tab Windows-only
         st = static.get(ip, {})
         last = latest.get(ip, {})
         hot = db.health_hot_minutes(ip, now - 86400, config.HEALTH_CPU_HOT_C, config.HEALTH_GPU_HOT_C)
@@ -928,51 +1133,84 @@ def enforce(pc_ip: str, authorization: str | None = Header(None)):
     return {"command": _mirror_cmd(pc_ip, "deploy", config.TRAINING_LIVE)}
 
 
-@app.post("/agents/{pc_ip}/import-result")
-def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
-    """Phase 1 bootstrap upload, streamed in batches to bound memory. batch_index
-    0 clears the folder; final=true records the import. No commit until /seal."""
-    _auth(authorization)
-    folder = payload["folder"]
-    files = {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()}
+def _import_batch(pc_ip: str, folder: str, files: dict, batch_index: int = 0,
+                  final: bool = True, total_bytes: int = 0, missing: list | None = None,
+                  on_commit=None, message: str | None = None, author: str = "import",
+                  progress: dict | None = None):
+    """Stage one import batch into the working clone.
+
+    Shared by both transports: the Windows agent uploads batches over HTTP, while the
+    coordinator's SSH transport pulls them itself and calls this directly with raw bytes.
+    Keeping one implementation is what guarantees the two agree on the dev-vs-pre-seal
+    branch choice, on progress accounting, and on when the commit fires.
+
+    `on_commit` runs after a dev-mode commit finishes (SSH import uses it to restore
+    executable bits, which git records but write_files cannot).
+
+    `progress` selects which dict the UI reads this from — _import_progress by default,
+    or _capture_progress when a dev capture is being served this way.
+    """
+    prog_map = _import_progress if progress is None else progress
+    fresh = {"folder": folder, "total_bytes": total_bytes,
+             "received_bytes": 0, "received_files": 0, "done": False}
     # Before v1.0 there's no dev branch: stage into the working tree for the seal.
     # After v1.0, import lands on dev and is committed, so it can feed a dev version.
     dev_mode = git_ops.ref_sha(config.DEV_BRANCH) is not None
-    if payload.get("batch_index", 0) == 0:
+    if batch_index == 0:
         if dev_mode:
             git_ops.dev_import_begin(folder)
         else:
             git_ops.clear_folder(folder)
-        _import_progress[pc_ip] = {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
-                                   "received_bytes": 0, "received_files": 0, "done": False}
+        prog_map[pc_ip] = dict(fresh)
     git_ops.write_files(files)
-    prog = _import_progress.setdefault(pc_ip, {"folder": folder, "total_bytes": payload.get("total_bytes", 0),
-                                               "received_bytes": 0, "received_files": 0, "done": False})
+    prog = prog_map.setdefault(pc_ip, dict(fresh))
     prog["received_bytes"] += sum(len(b) for b in files.values())
     prog["received_files"] += len(files)
-    if payload.get("final", True):
+    if final:
+        if on_commit:
+            on_commit()
         n, b = git_ops.folder_stats(folder)
-        missing = payload.get("missing", [])
+        missing = missing or []
         if dev_mode:
             # git add (hashing GBs) + commit + LFS push can take minutes — do it in the
             # background so the agent's final-batch request returns immediately, and
             # surface a "committing" phase to the UI instead of a stuck 100% bar.
             prog["committing"] = True
-            threading.Thread(target=_finalize_dev_import,
-                             args=(pc_ip, folder, n, b, missing), daemon=True).start()
+            threading.Thread(
+                target=_finalize_dev_import,
+                args=(pc_ip, folder, n, b, missing,
+                      message or f"import content for {pc_ip}", author, prog_map),
+                daemon=True).start()
         else:
             prog["done"] = True
             db.record_import(pc_ip, folder, n, b, missing)
-    return {"staged_files": len(files), "batch": payload.get("batch_index", 0)}
+    return {"staged_files": len(files), "batch": batch_index}
 
 
-def _finalize_dev_import(pc_ip: str, folder: str, n: int, b: int, missing: list):
+@app.post("/agents/{pc_ip}/import-result")
+def import_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
+    """Phase 1 bootstrap upload, streamed in batches to bound memory. batch_index
+    0 clears the folder; final=true records the import. No commit until /seal."""
+    _auth(authorization)
+    return _import_batch(
+        pc_ip, payload["folder"],
+        {p: base64.b64decode(b) for p, b in payload.get("files", {}).items()},
+        batch_index=payload.get("batch_index", 0),
+        final=payload.get("final", True),
+        total_bytes=payload.get("total_bytes", 0),
+        missing=payload.get("missing", []),
+    )
+
+
+def _finalize_dev_import(pc_ip: str, folder: str, n: int, b: int, missing: list,
+                         message: str | None = None, author: str = "import",
+                         prog_map: dict | None = None):
     """Commit + push a completed dev import off the request thread."""
     try:
-        git_ops.dev_import_commit(folder, f"import content for {pc_ip}", "import")
+        git_ops.dev_import_commit(folder, message or f"import content for {pc_ip}", author)
     finally:
         db.record_import(pc_ip, folder, n, b, missing)
-        prog = _import_progress.get(pc_ip)
+        prog = (prog_map if prog_map is not None else _import_progress).get(pc_ip)
         if prog is not None:
             prog["committing"] = False
             prog["done"] = True
@@ -988,9 +1226,14 @@ def size_report_result(pc_ip: str, payload: dict = Body(...), authorization: str
 
 # ---- filesystem browser (config panel) ----------------------------------
 @app.get("/agents/{pc_ip}/browse")
-def browse(pc_ip: str, path: str = ""):
+def browse(pc_ip: str, path: str = "", x_operator_token: str | None = Header(None)):
     """Operator endpoint: ask the agent to list `path` (or drives if empty) and
-    block until it answers. Powers the config-panel file tree."""
+    block until it answers. Powers the config-panel file tree.
+
+    An SSH device has no agent to ask, so the coordinator lists it over SFTP. Same
+    response shape either way, so the tree UI is identical for both."""
+    if _ssh_guard(pc_ip, x_operator_token):
+        return ssh_ops.browse(pc_ip, path)
     req_id = uuid.uuid4().hex
     ev = threading.Event()
     _browse_requests[req_id] = {"event": ev, "result": None}
@@ -1016,9 +1259,14 @@ def browse_result(pc_ip: str, payload: dict = Body(...), authorization: str | No
 
 
 @app.get("/agents/{pc_ip}/drift")
-def drift(pc_ip: str):
+def drift(pc_ip: str, x_operator_token: str | None = Header(None)):
     """PC status 'diff': ask the agent which files differ between the deployed
     version and live, and block until it answers."""
+    if _ssh_guard(pc_ip, x_operator_token):
+        try:
+            return ssh_ops.drift(pc_ip)
+        except SSHError as e:
+            raise _ssh_error(e)
     req_id = uuid.uuid4().hex
     ev = threading.Event()
     _drift_requests[req_id] = {"event": ev, "result": None}
@@ -1046,8 +1294,13 @@ def drift_result(pc_ip: str, payload: dict = Body(...), authorization: str | Non
 
 
 @app.get("/agents/{pc_ip}/filediff")
-def filediff(pc_ip: str, app: str, path: str):
+def filediff(pc_ip: str, app: str, path: str, x_operator_token: str | None = Header(None)):
     """Read one drifted file (version vs live) so the UI can show a line diff."""
+    if _ssh_guard(pc_ip, x_operator_token):
+        try:
+            return ssh_ops.filediff(pc_ip, app, path)
+        except SSHError as e:
+            raise _ssh_error(e)
     req_id = uuid.uuid4().hex
     ev = threading.Event()
     _filediff_requests[req_id] = {"event": ev, "result": None}
@@ -1098,13 +1351,28 @@ def capture_result(pc_ip: str, payload: dict = Body(...), authorization: str | N
     return result
 
 
+def _record_deploy_result(pc_ip: str, folder: str, mode: str, ref, clean: bool,
+                          error: str | None = None, kind: str | None = None):
+    """Record the outcome of one PC's deploy. Shared by the agent's callback and the
+    coordinator's own SSH deploy workers, so ETA timing and progress states can't drift
+    between the two transports."""
+    now = time.time()
+    dp = _deploy_progress.get(pc_ip)
+    if error:
+        _agent_errors[pc_ip] = error
+        db.upsert_agent(pc_ip, folder, "ERROR", ref, False, kind=kind)
+        _deploy_progress[pc_ip] = {"state": "fail", "at": now, "error": error}
+        return
+    db.upsert_agent(pc_ip, folder, mode, ref, clean, kind=kind)
+    if dp and dp.get("state") == "syncing":
+        _last_deploy_dur[pc_ip] = now - dp["at"]  # remember for the next ETA
+    _agent_errors.pop(pc_ip, None)
+    _deploy_progress[pc_ip] = {"state": "ok", "at": now}  # this PC finished syncing
+
+
 @app.post("/agents/{pc_ip}/deploy-result")
 def deploy_result(pc_ip: str, payload: dict = Body(...), authorization: str | None = Header(None)):
     _auth(authorization)
-    db.upsert_agent(pc_ip, payload.get("folder", ""), payload.get("mode", "TRAINING"),
-                    payload.get("ref"), payload.get("clean", True))
-    dp = _deploy_progress.get(pc_ip)
-    if dp and dp.get("state") == "syncing":
-        _last_deploy_dur[pc_ip] = time.time() - dp["at"]  # remember for the next ETA
-    _deploy_progress[pc_ip] = {"state": "ok", "at": time.time()}  # this PC finished syncing
+    _record_deploy_result(pc_ip, payload.get("folder", ""), payload.get("mode", "TRAINING"),
+                          payload.get("ref"), payload.get("clean", True))
     return {"ok": True}

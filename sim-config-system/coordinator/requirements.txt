@@ -2,3 +2,8 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2
 pyyaml>=6
+# Agentless Linux devices: SSH/SFTP transport (paramiko) and encryption at rest for a
+# remembered root password (cryptography, which paramiko pulls in anyway - listed
+# explicitly because secretbox.py imports Fernet directly).
+paramiko>=3.4
+cryptography>=42

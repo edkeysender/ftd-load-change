@@ -51,12 +51,40 @@ SIM_INSTALLS_DIR="$DATA_DIR/installs" bash "$SCRIPT_DIR/fetch-pawnio.sh" \
 if [ ! -d "$REPO_DIR/.venv" ]; then
     python3 -m venv "$REPO_DIR/.venv"
 fi
+# Per-device SSH keypairs for agentless Linux devices (coordinator/config.py SSH_DIR).
+mkdir -p "$DATA_DIR/ssh"
+chmod 700 "$DATA_DIR/ssh"
+
 "$REPO_DIR/.venv/bin/pip" install --quiet --upgrade pip
-"$REPO_DIR/.venv/bin/pip" install --quiet -r "$REPO_DIR/coordinator/requirements.txt"
+# paramiko/cryptography ship aarch64 wheels, so this is normally wheel-only. On a 32-bit
+# or unusual image pip may need to build them, which requires toolchain headers.
+if ! "$REPO_DIR/.venv/bin/pip" install --quiet -r "$REPO_DIR/coordinator/requirements.txt"; then
+    echo "    pip install failed - installing build dependencies and retrying..."
+    apt install -y python3-dev libffi-dev build-essential
+    "$REPO_DIR/.venv/bin/pip" install -r "$REPO_DIR/coordinator/requirements.txt"
+fi
 
 echo "[3/5] Writing env file ($ENV_FILE)..."
+# Secrets are generated once and never rotated by re-running setup.
+#   SIM_AGENT_TOKEN    - shared bearer token every agent sends
+#   SIM_OPERATOR_TOKEN - guards the SSH surface (enrolling a Linux device, browsing it
+#                        as root); the dashboard prompts for it once
+#   SIM_SECRET_KEY     - Fernet key encrypting a remembered root password at rest
+gen_token() { head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32; }
+gen_fernet_key() { head -c 32 /dev/urandom | base64 | tr '+/' '-_'; }
+
+# Append a key to the env file only if it isn't set yet, so an existing install picks up
+# newly-introduced settings without losing its current ones.
+ensure_env() {   # ensure_env KEY VALUE COMMENT
+    if grep -q "^$1=" "$ENV_FILE" 2>/dev/null; then
+        return 1
+    fi
+    { [ -n "$3" ] && echo "# $3"; echo "$1=$2"; } >> "$ENV_FILE"
+    return 0
+}
+
 if [ ! -f "$ENV_FILE" ]; then
-    TOKEN=$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 32)
+    TOKEN=$(gen_token)
     cat > "$ENV_FILE" <<EOF
 # Coordinator environment. Edit and 'systemctl restart sim-coordinator' to apply.
 SIM_PORT=$PORT
@@ -73,8 +101,22 @@ EOF
     echo "    Generated agent token (also stored in $ENV_FILE):"
     echo "      $TOKEN"
 else
-    echo "    $ENV_FILE already exists, leaving it as-is."
+    echo "    $ENV_FILE already exists, keeping its current settings."
 fi
+
+OP_TOKEN=$(gen_token)
+# Note the if-form: ensure_env returns 1 when the key is already present, and under
+# `set -e` a bare `ensure_env ... && echo ...` would abort the script on every re-run.
+if ensure_env SIM_OPERATOR_TOKEN "$OP_TOKEN" \
+    "Operator token for the SSH device surface (dashboard asks for it once)."; then
+    echo "    Generated operator token (also stored in $ENV_FILE):"
+    echo "      $OP_TOKEN"
+fi
+if ensure_env SIM_SECRET_KEY "$(gen_fernet_key)" \
+    "Encrypts stored SSH passwords. Changing it makes existing ones unreadable."; then
+    echo "    Generated secret key for encrypting stored SSH passwords."
+fi
+chmod 600 "$ENV_FILE"
 
 echo "[4/5] Installing systemd service ($SERVICE)..."
 cat > "$SERVICE" <<EOF

@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS health_samples (
     gpu_c REAL
 );
 CREATE INDEX IF NOT EXISTS health_samples_pc_at ON health_samples (pc_ip, at);
+CREATE TABLE IF NOT EXISTS ssh_devices (
+    pc_ip       TEXT PRIMARY KEY,   -- same key space as agents.pc_ip and manifest pcs
+    label       TEXT,               -- friendly name shown in Fleet (usually the hostname)
+    port        INTEGER DEFAULT 22,
+    user        TEXT DEFAULT 'root',
+    auth        TEXT DEFAULT 'key', -- key | password
+    key_path    TEXT,               -- coordinator-generated private key for this device
+    secret      TEXT,               -- Fernet token of the password; NULL unless remembered
+    fingerprint TEXT,               -- host key pinned at enrollment (TOFU)
+    os_pretty   TEXT,               -- /etc/os-release PRETTY_NAME
+    kernel      TEXT,
+    caps        TEXT,               -- JSON: {"sftp":bool,"rsync":bool,"sha256sum":bool}
+    added_at    REAL,
+    last_ok     REAL,               -- last successful connect
+    last_error  TEXT
+);
 INSERT OR IGNORE INTO dev_session (id, holder, started_at) VALUES (1, NULL, NULL);
 """
 
@@ -132,27 +148,58 @@ def init():
             c.execute("ALTER TABLE agents ADD COLUMN host TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Migration for the agents.kind column: NULL/'agent' = Windows PC running the Go
+        # agent, 'ssh' = agentless Linux device the coordinator drives over SSH.
+        try:
+            c.execute("ALTER TABLE agents ADD COLUMN kind TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
 
 # --- agents -------------------------------------------------------------
-def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None, mac=None, host=None):
-    # version + mac + host are COALESCE'd so callers that don't know them (deploy-result)
-    # don't wipe the last-known values.
+def upsert_agent(pc_ip, folder, mode, current_ref, clean, version=None, mac=None, host=None,
+                 kind=None):
+    # version + mac + host + kind are COALESCE'd so callers that don't know them
+    # (deploy-result) don't wipe the last-known values.
     with conn() as c:
         c.execute(
-            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version, mac, host)
-               VALUES (?,?,?,?,?,?,?,?,?)
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, version, mac, host, kind)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(pc_ip) DO UPDATE SET
                  folder=excluded.folder, mode=excluded.mode,
                  current_ref=excluded.current_ref, clean=excluded.clean,
                  last_seen=excluded.last_seen,
                  version=COALESCE(excluded.version, agents.version),
                  mac=COALESCE(excluded.mac, agents.mac),
-                 host=COALESCE(excluded.host, agents.host)""",
-            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version, mac, host),
+                 host=COALESCE(excluded.host, agents.host),
+                 kind=COALESCE(excluded.kind, agents.kind)""",
+            (pc_ip, folder, mode, current_ref, int(clean), time.time(), version, mac, host, kind),
         )
         # A detected agent un-hides a PC that was manually removed from PC status.
         c.execute("DELETE FROM dismissed_pcs WHERE pc_ip=?", (pc_ip,))
+
+
+def touch_agent(pc_ip, folder=None):
+    """Liveness-only heartbeat substitute for an agentless SSH device.
+
+    Deliberately NOT upsert_agent: that overwrites mode/current_ref/clean unconditionally,
+    so calling it from the poller would reset a device's deployed state every few seconds.
+    This touches last_seen (which is all list_agents needs to compute `online`) and leaves
+    everything an import or deploy recorded intact.
+
+    Unlike upsert_agent it does not clear dismissed_pcs — removing an SSH device deletes
+    its credentials, so there is nothing to resurrect on its own.
+    """
+    with conn() as c:
+        c.execute(
+            """INSERT INTO agents (pc_ip, folder, mode, current_ref, clean, last_seen, kind)
+               VALUES (?,?,'IDLE',NULL,1,?,'ssh')
+               ON CONFLICT(pc_ip) DO UPDATE SET
+                 last_seen=excluded.last_seen,
+                 folder=COALESCE(agents.folder, excluded.folder),
+                 kind='ssh'""",
+            (pc_ip, folder, time.time()),
+        )
 
 
 def list_agents():
@@ -188,6 +235,78 @@ def forget_agent(pc_ip):
 def list_dismissed():
     with conn() as c:
         return [r["pc_ip"] for r in c.execute("SELECT pc_ip FROM dismissed_pcs")]
+
+
+# --- agentless Linux devices (SSH transport) ----------------------------
+def upsert_ssh_device(pc_ip, label=None, port=22, user="root", auth="key", key_path=None,
+                      secret=None, fingerprint=None, os_pretty=None, kernel=None, caps=None):
+    """Record an enrolled device. secret/key_path/fingerprint are COALESCE'd so a later
+    probe that only learned the OS can't wipe the credentials."""
+    with conn() as c:
+        c.execute(
+            """INSERT INTO ssh_devices (pc_ip, label, port, user, auth, key_path, secret,
+                                        fingerprint, os_pretty, kernel, caps, added_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(pc_ip) DO UPDATE SET
+                 label=COALESCE(excluded.label, ssh_devices.label),
+                 port=excluded.port, user=excluded.user, auth=excluded.auth,
+                 key_path=COALESCE(excluded.key_path, ssh_devices.key_path),
+                 secret=COALESCE(excluded.secret, ssh_devices.secret),
+                 fingerprint=COALESCE(excluded.fingerprint, ssh_devices.fingerprint),
+                 os_pretty=COALESCE(excluded.os_pretty, ssh_devices.os_pretty),
+                 kernel=COALESCE(excluded.kernel, ssh_devices.kernel),
+                 caps=COALESCE(excluded.caps, ssh_devices.caps)""",
+            (pc_ip, label, int(port), user, auth, key_path,
+             secret, fingerprint, os_pretty, kernel,
+             json.dumps(caps) if isinstance(caps, dict) else caps, time.time()),
+        )
+
+
+def clear_ssh_secret(pc_ip):
+    """Forget a remembered password without un-enrolling the device (COALESCE in
+    upsert_ssh_device can't set a column back to NULL)."""
+    with conn() as c:
+        c.execute("UPDATE ssh_devices SET secret=NULL WHERE pc_ip=?", (pc_ip,))
+
+
+def _ssh_row(r):
+    d = dict(r)
+    try:
+        d["caps"] = json.loads(d["caps"]) if d.get("caps") else {}
+    except (ValueError, TypeError):
+        d["caps"] = {}
+    return d
+
+
+def list_ssh_devices():
+    with conn() as c:
+        return [_ssh_row(r) for r in c.execute("SELECT * FROM ssh_devices")]
+
+
+def ssh_device(pc_ip):
+    with conn() as c:
+        row = c.execute("SELECT * FROM ssh_devices WHERE pc_ip=?", (pc_ip,)).fetchone()
+        return _ssh_row(row) if row else None
+
+
+def touch_ssh_device(pc_ip, ok, error=None):
+    """Stamp the outcome of a connection attempt (drives the Fleet detail panel)."""
+    with conn() as c:
+        if ok:
+            c.execute("UPDATE ssh_devices SET last_ok=?, last_error=NULL WHERE pc_ip=?",
+                      (time.time(), pc_ip))
+        else:
+            c.execute("UPDATE ssh_devices SET last_error=? WHERE pc_ip=?", (error, pc_ip))
+
+
+def forget_ssh_device(pc_ip):
+    """Un-enrol a device: drop its credentials and its fleet row. Returns the private-key
+    path so the caller can delete the file (the DB layer doesn't touch the filesystem)."""
+    with conn() as c:
+        row = c.execute("SELECT key_path FROM ssh_devices WHERE pc_ip=?", (pc_ip,)).fetchone()
+        c.execute("DELETE FROM ssh_devices WHERE pc_ip=?", (pc_ip,))
+        c.execute("DELETE FROM agents WHERE pc_ip=?", (pc_ip,))
+        return row["key_path"] if row else None
 
 
 # --- dev-session lock ---------------------------------------------------

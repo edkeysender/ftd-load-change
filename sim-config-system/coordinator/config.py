@@ -68,3 +68,35 @@ HEALTH_HOT_SUSTAIN_MIN = int(os.environ.get("SIM_HEALTH_HOT_SUSTAIN_MIN", "20"))
 
 # Shared bearer token for agent auth (OPEN QUESTION: replace with mTLS if LAN untrusted).
 AGENT_TOKEN = os.environ.get("SIM_AGENT_TOKEN", "change-me")
+
+# ---- Agentless Linux devices (SSH transport) ---------------------------------
+# Operator token guarding the SSH surface (enrollment + browsing a Linux box's filesystem
+# as root). The rest of the operator API is unauthenticated on a trusted LAN, but these
+# routes are not: when this is unset they refuse service rather than allowing access.
+OPERATOR_TOKEN = os.environ.get("SIM_OPERATOR_TOKEN", "")
+
+# Key for encrypting stored secrets (see secretbox.py). Unset => passwords are never
+# persisted, which is a supported configuration, not an error.
+SECRET_KEY = os.environ.get("SIM_SECRET_KEY", "")
+
+# Per-device SSH keypairs the coordinator generates and installs. Derived from DB_PATH so
+# it follows SIM_DATA_DIR on a real Pi (/var/lib/sim-config) instead of the /srv defaults
+# above, which pi-setup.sh does not set.
+SSH_DIR = Path(os.environ.get("SIM_SSH_DIR", str(DB_PATH.parent / "ssh")))
+
+# Liveness polling. There is no heartbeat from an agentless device, so the coordinator
+# probes it. Two missed polls must exceed HEARTBEAT_TIMEOUT so online/offline behaves
+# exactly as it does for an agent PC.
+SSH_POLL_SECONDS = int(os.environ.get("SIM_SSH_POLL_SECONDS", "15"))
+SSH_CONNECT_TIMEOUT = int(os.environ.get("SIM_SSH_CONNECT_TIMEOUT", "10"))
+
+# How often to recompute `clean` (drift) for SSH devices; 0 disables. The Windows agent
+# effectively does this on every heartbeat; over SSH it is far more expensive.
+SSH_DRIFT_SECONDS = int(os.environ.get("SIM_SSH_DRIFT_SECONDS", "300"))
+
+# Deploy mirrors repo -> device WITH deletions, as root. These bound the blast radius of
+# a misconfigured live path or an empty repo folder: a plan exceeding either limit is
+# refused unless the operator explicitly confirms it.
+SSH_DELETE_LIMIT = int(os.environ.get("SIM_SSH_DELETE_LIMIT", "500"))
+SSH_DELETE_PCT = int(os.environ.get("SIM_SSH_DELETE_PCT", "50"))
+SSH_DEPLOY_WORKERS = int(os.environ.get("SIM_SSH_DEPLOY_WORKERS", "4"))
