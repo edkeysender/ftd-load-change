@@ -410,9 +410,13 @@ Windows PowerShell scripts).
 **Liveness.** There is no heartbeat, so the coordinator probes each device every
 `SIM_SSH_POLL_SECONDS` (15s) — two missed polls exceed `HEARTBEAT_TIMEOUT`, so online and
 offline behave just as they do for an agent. A device that fails three times in a row
-drops to a once-a-minute retry. `clean`/dirty is recomputed on a slower timer
-(`SIM_SSH_DRIFT_SECONDS`, default 300; `0` disables it), since a drift check over SSH is
-far more expensive than the agent's local one.
+drops to a once-a-minute retry.
+
+**Drift (the clean/dirty flag)** is recomputed at most every `SIM_SSH_DRIFT_SECONDS`
+(default 30; `0` disables it). That is a floor, not a fixed period: the coordinator widens
+it to ten times whatever the last check actually cost on that device, so a normal config
+tree updates within a poll or two while a very large one backs off by itself. Clicking
+**diff** in Fleet also refreshes the flag, since it measures the same thing.
 
 **Which account to enrol.** Prefer the least-privileged account that can write the
 directories you sync — deploy mirrors *with deletions*, so a root login means a mistyped

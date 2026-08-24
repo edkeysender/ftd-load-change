@@ -386,6 +386,13 @@ def deploy_worktree(ref: str):
     if not sha:
         return None
     with _WRITE_LOCK:
+        # Fast path: already at this commit. Drift checks call this on a timer, and
+        # re-running checkout + clean + `lfs pull` each time would take the global git
+        # write lock (contending with imports and captures) for no gain. Nothing else
+        # writes to this worktree, so being at the right sha means it is already correct.
+        if (DEPLOY_WT / ".git").exists():
+            if _git_wt("rev-parse", "HEAD", check=False).stdout.strip() == sha:
+                return DEPLOY_WT
         if not (DEPLOY_WT / ".git").exists():
             DEPLOY_WT.parent.mkdir(parents=True, exist_ok=True)
             # A stale registration (dir deleted by hand) blocks `worktree add`; prune it.

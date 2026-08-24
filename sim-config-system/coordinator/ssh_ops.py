@@ -766,8 +766,28 @@ def drift(pc_ip: str) -> dict:
                                 "path": d["rel"], "mtime": d["live_mtime"]})
             # A huge drift means "resync", not "read the list" — same cap as the agent.
             if len(entries) >= 1000:
-                return {"entries": entries[:1000]}
+                entries = entries[:1000]
+                break
+    # We just measured the truth, so keep the Fleet clean/dirty pill honest. This makes
+    # the dashboard's "diff" button double as a refresh, instead of showing changed files
+    # next to a row that still claims the device is clean.
+    _record_clean(pc_ip, not entries)
     return {"entries": entries}
+
+
+def _record_clean(pc_ip: str, clean: bool):
+    """Update just the clean flag of a deployed device, leaving mode and ref alone.
+
+    Only meaningful once something has been deployed: a device that was never deployed
+    has nothing to be clean or dirty against, and must not be promoted to TRAINING here.
+    """
+    row = next((a for a in db.list_agents() if a["pc_ip"] == pc_ip), None)
+    if not row or row.get("mode") != "TRAINING":
+        return
+    if bool(row.get("clean")) == clean:
+        return
+    db.upsert_agent(pc_ip, row.get("folder") or "", "TRAINING", row.get("current_ref"),
+                    clean, kind="ssh")
 
 
 def _norm_live(live: str) -> str:
@@ -832,6 +852,7 @@ _poller_started = False
 _fail_counts: dict = {}
 _next_attempt: dict = {}
 _last_drift_at: dict = {}
+_drift_cost: dict = {}      # pc_ip -> seconds the last drift check took (drives the interval)
 
 
 def start_poller():
@@ -891,25 +912,34 @@ def _poll_once():
 
 
 def _maybe_refresh_drift(pc_ip: str):
-    """Keep `clean` roughly honest. The Windows agent recomputes it on every heartbeat;
-    over SSH that is far too expensive, so this runs on a slow timer (0 = off)."""
+    """Keep the Fleet clean/dirty flag current. The Windows agent recomputes this on
+    every heartbeat; the SSH equivalent is a local walk plus one SFTP walk, which for a
+    normal config tree is well under a second.
+
+    The interval adapts to what the check actually costs on this device, so a small tree
+    updates within a poll or two while a huge one backs off on its own rather than
+    spending the coordinator's time in a loop. 0 disables it entirely.
+    """
     if not config.SSH_DRIFT_SECONDS:
         return
     now = time.time()
-    if now - _last_drift_at.get(pc_ip, 0) < config.SSH_DRIFT_SECONDS:
+    # Never spend more than ~10% of elapsed time drift-checking one device.
+    interval = max(config.SSH_DRIFT_SECONDS, _drift_cost.get(pc_ip, 0) * 10)
+    if now - _last_drift_at.get(pc_ip, 0) < interval:
         return
     _last_drift_at[pc_ip] = now
     if not git_ops.ref_sha(config.TRAINING_LIVE):
         return
     if pc_ip not in manifest.load_manifest_at(config.TRAINING_LIVE).get("pcs", {}):
         return
+    started = time.time()
     try:
-        entries = drift(pc_ip).get("entries", [])
+        drift(pc_ip)          # records the clean flag itself
     except Exception:
         return
-    folder = manifest.pc_folder(pc_ip, config.TRAINING_LIVE) or manifest.pc_folder(pc_ip) or ""
-    db.upsert_agent(pc_ip, folder, "TRAINING", config.TRAINING_LIVE,
-                    not entries, kind="ssh")
+    finally:
+        _drift_cost[pc_ip] = time.time() - started
+        _last_drift_at[pc_ip] = time.time()
 
 
 def shutdown():
