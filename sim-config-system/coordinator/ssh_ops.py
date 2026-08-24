@@ -528,6 +528,26 @@ def _check_delete_budget(plans, confirm_delete: bool):
         )
 
 
+def _check_writable(sess, pc_ip: str, dsts):
+    """Fail before touching anything if the SSH user can't write where it must.
+
+    Deploy replaces files in place; discovering half way through that the account has no
+    write access leaves the device in a mixed state, and the raw SFTP error
+    ("[Errno 13] Permission denied") names neither the path nor the user.
+    """
+    user = (db.ssh_device(pc_ip) or {}).get("user") or "the SSH user"
+    for dst in sorted(set(dsts)):
+        target = dst if sess.isdir(dst) else posixpath.dirname(dst)
+        reason = sess.check_writable(target)
+        if reason:
+            raise SSHError(
+                f"{user} cannot write to {target} on {pc_ip} ({reason}). "
+                f"Either give {user} ownership of that directory "
+                f"(sudo chown -R {user} {target}), or remove the device and re-add it "
+                f"as a user that can write there, such as root."
+            )
+
+
 def _apply_mirror(sess, plan, dst: str):
     copied = 0
     for item in plan["copy"]:
@@ -626,6 +646,7 @@ def deploy(pc_ip: str, ref: str | None = None, confirm_delete: bool = False) -> 
                 pairs.append((dst, plan))
                 plans.append(plan)
             _check_delete_budget(plans, confirm_delete)
+            _check_writable(sess, pc_ip, [d for d, _p in pairs])
             for dst, plan in pairs:
                 c, d = _apply_mirror(sess, plan, dst)
                 copied += c

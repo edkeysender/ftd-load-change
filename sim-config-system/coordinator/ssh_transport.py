@@ -496,11 +496,14 @@ class Session:
 
     # -- transfer -------------------------------------------------------
     def read_file(self, path: str, cap: int | None = None) -> bytes:
-        with self.sftp.open(_norm(path), "rb") as f:
-            size = cap if cap is not None else (f.stat().st_size or 0)
-            if size:
-                f.prefetch(size)   # without this paramiko reads are painfully slow
-            return f.read(size) if cap is not None else f.read()
+        try:
+            with self.sftp.open(_norm(path), "rb") as f:
+                size = cap if cap is not None else (f.stat().st_size or 0)
+                if size:
+                    f.prefetch(size)   # without this paramiko reads are painfully slow
+                return f.read(size) if cap is not None else f.read()
+        except IOError as e:
+            raise SSHError(f"reading {path}: {e}") from e
 
     def mkdirs(self, path: str):
         path = _norm(path)
@@ -512,9 +515,9 @@ class Session:
         for p in reversed(missing):
             try:
                 self.sftp.mkdir(p)
-            except IOError:
+            except IOError as e:
                 if not self.isdir(p):     # lost a race, or genuinely can't create it
-                    raise
+                    raise SSHError(f"creating directory {p}: {e}") from e
 
     def write_file(self, path: str, data: bytes, mode: int = 0o644, mtime=None):
         """Write atomically, then restore the file's mode and timestamp.
@@ -527,19 +530,45 @@ class Session:
         path = _norm(path)
         self.mkdirs(posixpath.dirname(path))
         tmp = path + ".simtmp"
-        self.sftp.putfo(io.BytesIO(data), tmp, len(data), confirm=True)
         try:
-            self.sftp.posix_rename(tmp, path)
-        except (IOError, AttributeError):
-            # posix-rename@openssh.com missing: plain rename can't clobber, so unlink first.
+            self.sftp.putfo(io.BytesIO(data), tmp, len(data), confirm=True)
             try:
-                self.sftp.remove(path)
+                self.sftp.posix_rename(tmp, path)
+            except (IOError, AttributeError):
+                # posix-rename@openssh.com missing: plain rename can't clobber, so unlink first.
+                try:
+                    self.sftp.remove(path)
+                except IOError:
+                    pass
+                self.sftp.rename(tmp, path)
+            self.sftp.chmod(path, mode)
+            if mtime:
+                self.sftp.utime(path, (mtime, mtime))
+        except IOError as e:
+            # Bare "[Errno 13] Permission denied" says nothing about which file, so name it.
+            try:
+                self.sftp.remove(tmp)          # don't leave a .simtmp behind
             except IOError:
                 pass
-            self.sftp.rename(tmp, path)
-        self.sftp.chmod(path, mode)
-        if mtime:
-            self.sftp.utime(path, (mtime, mtime))
+            raise SSHError(f"writing {path}: {e}") from e
+
+    def check_writable(self, path: str):
+        """Can we actually write here? Returns None if yes, else the reason.
+
+        Used before a mirror starts, so a permissions problem is reported up front
+        instead of after some of the files have already been replaced.
+        """
+        probe = posixpath.join(_norm(path), ".sim-write-probe")
+        try:
+            with self.sftp.open(probe, "wb") as f:
+                f.write(b"")
+        except IOError as e:
+            return str(e) or e.__class__.__name__
+        try:
+            self.sftp.remove(probe)
+        except IOError:
+            pass
+        return None
 
     def remove(self, path: str):
         """Unlink a file or symlink. Never follows the link."""
