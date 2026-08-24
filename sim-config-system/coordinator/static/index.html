@@ -644,6 +644,7 @@ function fleetRow(p, a, guardCount) {
   const actions = ssh
     ? `<option value="sshtest">Test connection</option>
         <option value="sshkey">Re-install key</option>
+        <option value="sshreauth">Re-authenticate…</option>
         <option value="sshremove">Remove device</option>`
     : `<option value="update">Update agent</option>
         <option value="wake">Wake on LAN</option>
@@ -1048,25 +1049,35 @@ const wakePc = ip => act(() => api('POST', '/agents/' + encodeURIComponent(ip) +
 const shutdownPc = ip => confirm('Force shut down ' + ip + '? Running apps are killed and the PC powers off immediately. Its agent must be online to receive this.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/shutdown', {}), 'Force shutdown sent to ' + ip);
 // --- add a Linux device (SSH enrollment) ---
 let sshBusy = false;
+let sshReauthIp = '';   // set => the modal is re-authenticating an existing device
 const INPUT_CSS = 'width:100%;padding:8px;border:1px solid #d3d1c7;border-radius:8px;box-sizing:border-box';
-function addSshDevice() {
+function addSshDevice(reauthIp) {
   sshBusy = false;
-  $('ssh-title').textContent = 'Add a Linux device';
+  sshReauthIp = reauthIp || '';
+  const d = sshReauthIp ? (SSH[sshReauthIp] || {}) : {};
+  $('ssh-title').textContent = sshReauthIp ? ('Re-authenticate ' + sshReauthIp) : 'Add a Linux device';
   const lbl = t => `<label style="display:block;font-size:13px;margin:10px 0 4px">${t}</label>`;
   $('ssh-body').innerHTML =
-    '<div class="hint" style="margin-bottom:6px">The coordinator connects over SSH with this password once, ' +
-    'installs its own key, and uses the key from then on. No agent is installed on the device.</div>' +
-    '<div style="display:flex;gap:8px">' +
-      `<div style="flex:2">${lbl('IP address')}<input id="ssh-ip" style="${INPUT_CSS}" placeholder="70.84.68.42"></div>` +
-      `<div style="flex:1">${lbl('Port')}<input id="ssh-port" style="${INPUT_CSS}" value="22"></div>` +
+    '<div class="hint" style="margin-bottom:6px">' +
+      (sshReauthIp
+        ? 'Replaces this device\'s login. Use it after the device was rebuilt (new host key), ' +
+          'if its password changed, or to switch to an account that can write the folders you sync.'
+        : 'The coordinator connects over SSH with this password once, installs its own key, ' +
+          'and uses the key from then on. No agent is installed on the device.') +
     '</div>' +
     '<div style="display:flex;gap:8px">' +
-      `<div style="flex:1">${lbl('User')}<input id="ssh-user" style="${INPUT_CSS}" value="root"></div>` +
+      `<div style="flex:2">${lbl('IP address')}<input id="ssh-ip" style="${INPUT_CSS}" placeholder="70.84.68.42" value="${esc(sshReauthIp)}"${sshReauthIp ? ' readonly' : ''}></div>` +
+      `<div style="flex:1">${lbl('Port')}<input id="ssh-port" style="${INPUT_CSS}" value="${esc(d.port || 22)}"></div>` +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      `<div style="flex:1">${lbl('User')}<input id="ssh-user" style="${INPUT_CSS}" value="${esc(d.user || 'root')}"></div>` +
       `<div style="flex:1">${lbl('Password')}<input id="ssh-pass" type="password" style="${INPUT_CSS}"></div>` +
     '</div>' +
-    `${lbl('Name (optional)')}<input id="ssh-label" style="${INPUT_CSS}" placeholder="defaults to the OS name">` +
+    (sshReauthIp ? '' :
+      `${lbl('Name (optional)')}<input id="ssh-label" style="${INPUT_CSS}" placeholder="defaults to the OS name">`) +
     '<label style="display:block;font-size:12px;margin:12px 0 0;color:' + (CAN_STORE_SECRET ? '#2c2c2a' : '#908e86') + '">' +
-      '<input type="checkbox" id="ssh-remember"' + (CAN_STORE_SECRET ? '' : ' disabled') + '> ' +
+      '<input type="checkbox" id="ssh-remember"' + (CAN_STORE_SECRET ? '' : ' disabled') +
+      (sshReauthIp && d.password_stored ? ' checked' : '') + '> ' +
       'Remember the password (encrypted on the Pi)' +
     '</label>' +
     '<div class="hint" style="margin-top:2px">' +
@@ -1077,10 +1088,47 @@ function addSshDevice() {
     '<div id="ssh-result" style="margin-top:12px"></div>' +
     '<div class="row-actions" style="margin-top:14px">' +
       '<button class="ghost" onclick="doSshTest()">Test connection</button>' +
-      '<button onclick="doSshAdd()">Add device</button>' +
+      (sshReauthIp
+        ? '<button onclick="doSshReauth()">Re-authenticate</button>'
+        : '<button onclick="doSshAdd()">Add device</button>') +
     '</div>';
   $('ssh-modal').style.display = 'flex';
-  setTimeout(() => { const e = $('ssh-ip'); if (e) e.focus(); }, 40);
+  setTimeout(() => { const e = $(sshReauthIp ? 'ssh-pass' : 'ssh-ip'); if (e) e.focus(); }, 40);
+}
+async function doSshReauth() {
+  const f = sshForm();
+  if (!f.password) return sshSay('Enter the password for ' + esc(sshReauthIp) + '.', true);
+  if (!OPTOKEN && !askOpToken('Re-authenticating a device needs the operator token.')) return;
+  const body = { user: f.user, port: f.port, password: f.password, remember: f.remember,
+                 accept_host_key: false };
+  sshBusy = true; $('ssh-close').style.display = 'none'; sshSay('Re-authenticating…');
+  const url = '/ssh-devices/' + encodeURIComponent(sshReauthIp) + '/reauth';
+  try {
+    let r;
+    try {
+      r = await apiOp('POST', url, body);
+    } catch (e) {
+      // A rebuilt device has a different host key. Never accept that silently.
+      if (!/host key/i.test(e.message || '')) throw e;
+      sshBusy = false;
+      if (!confirm(e.message + '\n\nAccept the new host key and continue?')) throw e;
+      sshBusy = true;
+      body.accept_host_key = true;
+      r = await apiOp('POST', url, body);
+    }
+    sshSay('✓ re-authenticated as ' + esc(r.user) + '@' + esc(sshReauthIp) + ':' + r.port +
+           '\n' + esc(r.os_pretty || '') +
+           '\nkey ' + esc(r.key_installed) +
+           (r.host_key_changed ? '\nhost key updated' : '') +
+           '\npassword ' + (r.password_stored ? 'stored, encrypted' : 'not stored') +
+           (r.note ? '\n\n' + esc(r.note) : ''));
+    await refresh();
+    setTimeout(() => { sshBusy = false; $('ssh-close').style.display = ''; closeSsh(); },
+               r.note ? 4000 : 1600);
+  } catch (e) {
+    sshBusy = false; $('ssh-close').style.display = '';
+    sshSay('✗ ' + esc(e.message), true);
+  }
 }
 function closeSsh() { if (!sshBusy) $('ssh-modal').style.display = 'none'; }
 function sshForm() {
@@ -1089,7 +1137,7 @@ function sshForm() {
     port: parseInt($('ssh-port').value, 10) || 22,
     user: ($('ssh-user').value || 'root').trim(),
     password: $('ssh-pass').value,
-    label: ($('ssh-label').value || '').trim() || null,
+    label: (($('ssh-label') || {}).value || '').trim() || null,   // absent in re-auth mode
     remember: !!($('ssh-remember') || {}).checked,
   };
 }
@@ -1152,7 +1200,8 @@ const removeSsh = ip => confirm('Remove ' + ip + ' from the fleet?\n\nIts stored
 function pcAction(ip, sel) {
   const v = sel.value; sel.value = '';
   ({ update: updateAgent, wake: wakePc, shutdown: shutdownPc, remove: forgetPc,
-     sshtest: testSsh, sshkey: rekeySsh, sshremove: removeSsh }[v] || (() => {}))(ip);
+     sshtest: testSsh, sshkey: rekeySsh, sshremove: removeSsh,
+     sshreauth: addSshDevice }[v] || (() => {}))(ip);
 }
 async function driftPc(ip) {
   showDriftModal(ip, null);                       // loading state

@@ -414,6 +414,21 @@ drops to a once-a-minute retry. `clean`/dirty is recomputed on a slower timer
 (`SIM_SSH_DRIFT_SECONDS`, default 300; `0` disables it), since a drift check over SSH is
 far more expensive than the agent's local one.
 
+**Which account to enrol.** Prefer the least-privileged account that can write the
+directories you sync — deploy mirrors *with deletions*, so a root login means a mistyped
+`live` path can reach anything on the box. If a deploy fails with a permissions error,
+`chown` the managed directory to that account rather than re-enrolling as root. The
+error names the user, the path and both remedies, and is raised *before* anything is
+modified, so a failed deploy never leaves the device half-updated.
+
+**Re-authenticating** (Fleet → device → *Re-authenticate…*) replaces a device's login in
+place, keeping its identity and history. Use it when the device was rebuilt and its host
+key changed (the new key must be confirmed explicitly — it is never accepted silently),
+when the password changed, or to move to an account with different permissions. Switching
+account leaves the coordinator's key in the old account's `authorized_keys`; the result
+message says so. *Re-install key* is the narrower action for when only `authorized_keys`
+was wiped.
+
 **Removing a device** deletes its stored credentials and the coordinator's private key.
 The public key stays in that device's `authorized_keys` — by then we can no longer
 authenticate to remove it — so delete it there if you want it gone.
@@ -445,7 +460,8 @@ Discovery (endpoints still exist; the panel is hidden — agents self-register v
 `POST|GET /discover`, `POST /discover/add|remove`, `GET /hosts`. Helper: `deploy/discover.sh`.
 SSH devices (all require the `X-Operator-Token` header): `GET|POST /ssh-devices`,
 `POST /ssh-devices/test`, `POST /ssh-devices/{ip}/test`,
-`POST /ssh-devices/{ip}/reinstall-key`, `DELETE /ssh-devices/{ip}`,
+`POST /ssh-devices/{ip}/reinstall-key`, `POST /ssh-devices/{ip}/reauth`,
+`DELETE /ssh-devices/{ip}`,
 `GET /ssh-devices/{ip}/deploy-preview?ref=`. The same header is required on
 `/agents/{ip}/browse|drift|filediff` and `/import/{pc}` **when the target is an SSH
 device** — a Windows PC's call path is unchanged.

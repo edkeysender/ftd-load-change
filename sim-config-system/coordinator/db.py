@@ -262,6 +262,22 @@ def upsert_ssh_device(pc_ip, label=None, port=22, user="root", auth="key", key_p
         )
 
 
+def update_ssh_auth(pc_ip, user, port, auth, key_path, fingerprint, secret):
+    """Replace a device's credentials outright (re-authentication).
+
+    Distinct from upsert_ssh_device, which COALESCEs secret/fingerprint so an ordinary
+    probe can't wipe them. Here every field is intentional: the user may have changed,
+    and a rebuilt device legitimately has a different host key.
+    """
+    with conn() as c:
+        c.execute(
+            """UPDATE ssh_devices SET user=?, port=?, auth=?, key_path=?,
+                                      fingerprint=?, secret=?, last_error=NULL
+               WHERE pc_ip=?""",
+            (user, int(port), auth, key_path, fingerprint, secret, pc_ip),
+        )
+
+
 def clear_ssh_secret(pc_ip):
     """Forget a remembered password without un-enrolling the device (COALESCE in
     upsert_ssh_device can't set a column back to NULL)."""

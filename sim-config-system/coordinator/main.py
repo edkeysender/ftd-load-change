@@ -433,6 +433,14 @@ class SshKeyReq(BaseModel):
     password: str | None = None
 
 
+class SshReauthReq(BaseModel):
+    user: str | None = None          # change the login (e.g. sim -> root)
+    port: int | None = None
+    password: str
+    remember: bool = False
+    accept_host_key: bool = False    # explicit consent when a rebuilt device's key differs
+
+
 @app.get("/ssh-devices")
 def ssh_devices(x_operator_token: str | None = Header(None)):
     _operator_auth(x_operator_token)
@@ -485,6 +493,22 @@ def ssh_device_reinstall_key(pc_ip: str, req: SshKeyReq | None = None,
     _operator_auth(x_operator_token)
     try:
         return ssh_ops.reinstall_key(pc_ip, req.password if req else None)
+    except SSHError as e:
+        raise _ssh_error(e)
+
+
+@app.post("/ssh-devices/{pc_ip}/reauth")
+def ssh_device_reauth(pc_ip: str, req: SshReauthReq,
+                      x_operator_token: str | None = Header(None)):
+    """Re-authenticate an enrolled device in place: change its login, port or host key.
+
+    For a device rebuilt with a new host key, a changed password, or moving to an account
+    with the filesystem permissions a deploy needs — without losing the device's identity
+    the way Remove + re-add would."""
+    _operator_auth(x_operator_token)
+    try:
+        return ssh_ops.reauth(pc_ip, user=req.user, port=req.port, password=req.password,
+                              remember=req.remember, accept_host_key=req.accept_host_key)
     except SSHError as e:
         raise _ssh_error(e)
 

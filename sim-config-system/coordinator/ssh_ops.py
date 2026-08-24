@@ -236,6 +236,62 @@ def reinstall_key(pc_ip: str, password: str | None = None) -> dict:
             "key_installed": "already present" if installed["already_present"] else "added"}
 
 
+def reauth(pc_ip: str, user=None, port=None, password=None, remember=False,
+           accept_host_key=False) -> dict:
+    """Re-authenticate an enrolled device: change the login, port or host key in place.
+
+    Covers what 'Re-install key' cannot — a device rebuilt with a new host key (which
+    correctly refuses to connect until someone confirms it), a changed password, or
+    moving to an account with different filesystem permissions. Without this the only
+    route is Remove + re-add, which throws away the device's label and history.
+
+    The keypair is per-device, so the same key is installed for the new account. The old
+    account keeps its copy in authorized_keys — we can no longer be sure of reaching it
+    to clean up, and the caller is told so.
+    """
+    dev = _device(pc_ip)
+    prev_user = dev.get("user") or "root"
+    user = (user or prev_user).strip()
+    port = int(port or dev.get("port") or 22)
+    if not password:
+        raise SSHError("a password is required to re-authenticate — it installs the key")
+    if remember and not secretbox.available():
+        raise SSHError(
+            "cannot remember the password: SIM_SECRET_KEY is not set in /etc/sim-config.env."
+        )
+    # Only skip the pinned host key when the operator explicitly accepted the change.
+    expected = None if accept_host_key else dev.get("fingerprint")
+    info = ssh_transport.probe(pc_ip, port, user, password=password,
+                               expected_fp=expected, accept_new=True)
+    fp = info["fingerprint"]
+    changed_host_key = bool(dev.get("fingerprint")) and fp != dev.get("fingerprint")
+
+    priv, pub_line = ssh_transport.generate_keypair(pc_ip, f"{_KEY_COMMENT}@{_hostname()}")
+    installed = ssh_transport.install_key(pc_ip, port, user, password, pub_line,
+                                          expected_fp=fp)
+    ssh_transport.verify_key_auth(pc_ip, port, user, priv, fp)
+
+    db.update_ssh_auth(pc_ip, user=user, port=port, auth="key", key_path=str(priv),
+                       fingerprint=fp,
+                       secret=secretbox.encrypt(password) if remember else None)
+    db.upsert_ssh_device(pc_ip, port=port, user=user, auth="key",
+                         os_pretty=info.get("os_pretty"), kernel=info.get("kernel"),
+                         caps=info.get("caps"))
+    db.touch_ssh_device(pc_ip, ok=True)
+    ssh_transport.drop(pc_ip)     # force the pool to reconnect with the new credentials
+
+    note = None
+    if user != prev_user:
+        note = (f"Switched from {prev_user} to {user}. The coordinator's key is still in "
+                f"{prev_user}'s authorized_keys on the device — remove it there if you "
+                f"want it gone.")
+    return {"ok": True, "user": user, "port": port,
+            "os_pretty": info.get("os_pretty"), "kernel": info.get("kernel"),
+            "fingerprint": fp, "host_key_changed": changed_host_key,
+            "key_installed": "already present" if installed["already_present"] else "added",
+            "password_stored": bool(remember), "note": note}
+
+
 def forget(pc_ip: str) -> dict:
     """Un-enrol: close the connection, drop the credentials, delete the key.
 
