@@ -646,9 +646,12 @@ def deploy_async_all(ips, ref: str):
     ips = list(ips)
     if not ips:
         return
-    git_ops.deploy_worktree(ref)   # materialise once, before the workers race for it
 
     def run():
+        # Materialise the ref once, here rather than in the caller: checking out and
+        # running `lfs pull` on a large load takes long enough to hold up the HTTP
+        # response to /deploy if done on the request thread.
+        git_ops.deploy_worktree(ref)
         with ThreadPoolExecutor(max_workers=config.SSH_DEPLOY_WORKERS) as pool:
             for ip in ips:
                 pool.submit(deploy, ip, ref)

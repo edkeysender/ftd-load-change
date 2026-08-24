@@ -2125,7 +2125,12 @@ function flushSelection() {
     if (ex.length) spec.exclude = ex; else delete spec.exclude;
     apps[key] = spec;
   }
-  manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps });
+  const extra = {};
+  // Record how this PC is reached, so the manifest committed into a version is
+  // self-describing — deploying an old version must not have to guess, or consult a
+  // database that may since have changed.
+  if (SSH[browsePc]) extra.transport = 'ssh';
+  manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps }, extra);
 }
 async function saveBrowserManifest() {
   flushSelection();  // fold in the PC currently on screen

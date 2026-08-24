@@ -274,6 +274,24 @@ def _mirror_cmd(ip: str, ctype: str, ref: str) -> dict:
             "git_remote": config.GIT_REMOTE}
 
 
+def _is_ssh_pc(ip: str, ref: str | None = None) -> bool:
+    """Can this PC only be reached over SSH?
+
+    Read the ref's manifest first, so a PC that changed transport between versions is
+    reached the way that version expects. But fall back to the enrolment record: the
+    manifest's `transport` is a hint, while an enrolled device is ground truth that
+    there is no agent on that machine to answer a queued command.
+
+    Without the fallback, a device added through the file browser (which did not write
+    `transport: ssh`) was classified as an agent PC — its deploy command went into the
+    in-memory queue, nothing ever popped it, and the deploy silently hung at "syncing"
+    forever while the device was never touched.
+    """
+    if manifest.pc_transport(ip, ref) == "ssh":
+        return True
+    return ssh_ops.is_ssh(ip)
+
+
 def _enqueue_deploy_all():
     # Target the PCs defined by the VERSION being deployed (training-live already points at
     # it), not the current working manifest. A snapshot can include PCs the working config
@@ -287,9 +305,7 @@ def _enqueue_deploy_all():
     for ip in ips:
         _deploy_progress[ip] = {"state": "syncing", "at": now,
                                 "expected": _last_deploy_dur.get(ip)}  # None until first timing
-    # Split by transport, using the manifest OF THE REF being deployed so a PC that
-    # changed transport between versions is reached the way that version expects.
-    ssh_ips = [ip for ip in ips if manifest.pc_transport(ip, ref) == "ssh"]
+    ssh_ips = [ip for ip in ips if _is_ssh_pc(ip, ref)]
     for ip in ips:
         if ip in ssh_ips:
             continue
