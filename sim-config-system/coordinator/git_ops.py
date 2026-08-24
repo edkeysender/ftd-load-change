@@ -357,6 +357,51 @@ def delete_dev(tag: str):
             _git("push", "origin", "--delete", tag, check=False)
 
 
+
+# --- server-side export (for transports the coordinator drives itself) --------
+# A Windows agent clones the monorepo itself, so the coordinator never needs a ref's
+# content on disk. An agentless SSH device has no such clone: the coordinator must read
+# the tree locally to mirror it down. That must NOT come from the working clone, which is
+# constantly checked out between branches under _WRITE_LOCK, nor from `git archive` /
+# `git show`, which emit git-LFS POINTER FILES rather than the binaries themselves
+# (.gitattributes routes *.dll/*.exe/*.zip/... through LFS).
+#
+# So: a dedicated detached worktree sharing the same object store, with LFS pulled.
+DEPLOY_WT = config.WORK_CLONE.parent / "deploy-wt"
+
+
+def _git_wt(*args, check=True):
+    return subprocess.run(["git", "-C", str(DEPLOY_WT), *args],
+                          capture_output=True, text=True, check=check)
+
+
+def deploy_worktree(ref: str):
+    """Materialise `ref` in a dedicated worktree with LFS blobs pulled, and return its
+    path. Cached across calls: a fleet-wide deploy checks out once and every worker reads
+    the same tree. Returns None if the ref doesn't resolve (e.g. before the first seal).
+
+    Callers must treat the result as READ-ONLY.
+    """
+    sha = ref_sha(ref)
+    if not sha:
+        return None
+    with _WRITE_LOCK:
+        if not (DEPLOY_WT / ".git").exists():
+            DEPLOY_WT.parent.mkdir(parents=True, exist_ok=True)
+            # A stale registration (dir deleted by hand) blocks `worktree add`; prune it.
+            _git("worktree", "prune", check=False)
+            r = _git("worktree", "add", "--detach", str(DEPLOY_WT), sha, check=False)
+            if r.returncode != 0:
+                return None
+        else:
+            _git_wt("checkout", "-f", "--detach", sha, check=False)
+        _git_wt("clean", "-fdx", check=False)
+        # Non-fatal: without LFS the tree still has pointer files, which the deploy
+        # planner detects as a mismatch rather than silently shipping 130-byte stubs.
+        _git_wt("lfs", "pull", check=False)
+        return DEPLOY_WT
+
+
 def changed_files(base: str, head: str):
     r = _git("diff", "--name-status", f"{base}..{head}", check=False)
     if r.returncode != 0:

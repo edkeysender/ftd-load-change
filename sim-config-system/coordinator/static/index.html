@@ -107,7 +107,7 @@
   <div style="margin-bottom:4px;display:flex;align-items:flex-start">
     <div>
       <h2 style="font-size:20px;text-transform:none;letter-spacing:0;color:#2c2c2a;margin:0 0 2px">Fleet</h2>
-      <div class="hint" style="margin:0 0 14px">Every PC that runs an agent — its deploy status, hardware health, and configuration compliance in one place.</div>
+      <div class="hint" style="margin:0 0 14px">Every managed machine — Windows PCs running the agent, and Linux devices managed over SSH — with its deploy status, hardware health, and configuration compliance in one place.</div>
     </div>
     <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
       <span class="muted" style="font-size:11px">History</span>
@@ -116,6 +116,7 @@
         <option value="7">7 days</option>
         <option value="30" selected>30 days</option>
       </select>
+      <button class="ghost" onclick="addSshDevice()">+ Linux device</button>
       <button class="ghost" onclick="updateAllAgents()">Update all agents</button>
     </span>
   </div>
@@ -328,6 +329,15 @@
     <div id="devload-body"></div>
   </div>
 </div>
+<div id="ssh-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:1000;align-items:center;justify-content:center" onclick="if(event.target===this)closeSsh()">
+  <div style="background:#fff;border-radius:12px;max-width:520px;width:90%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.3)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <b id="ssh-title">Add a Linux device</b>
+      <button class="ghost" id="ssh-close" style="margin-left:auto" onclick="closeSsh()">Cancel</button>
+    </div>
+    <div id="ssh-body"></div>
+  </div>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -337,14 +347,41 @@ function toast(msg, isErr) {
   const t = $('toast'); t.textContent = msg; t.className = 'show' + (isErr ? ' err' : '');
   setTimeout(() => t.className = '', 3500);
 }
+// Operator token. Only the SSH-device routes require it (they take a root password and
+// expose a Linux box's whole filesystem); everything else on this API is open on the LAN.
+let OPTOKEN = localStorage.getItem('simOpToken') || '';
+function setOpToken(t) { OPTOKEN = t || ''; localStorage.setItem('simOpToken', OPTOKEN); }
+function askOpToken(why) {
+  const t = prompt((why ? why + '\n\n' : '') +
+    'Operator token (SIM_OPERATOR_TOKEN from /etc/sim-config.env on the Pi):', OPTOKEN || '');
+  if (t === null) return false;
+  setOpToken(t.trim());
+  return true;
+}
 async function api(method, path, body) {
   const opt = { method, headers: {} };
+  if (OPTOKEN) opt.headers['X-Operator-Token'] = OPTOKEN;
   if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
   const r = await fetch(path, opt);
   const text = await r.text();
   let data = {}; try { data = text ? JSON.parse(text) : {}; } catch (e) {}
-  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  if (!r.ok) {
+    const err = new Error(data.detail || ('HTTP ' + r.status));
+    err.status = r.status;
+    throw err;
+  }
   return data;
+}
+// Run an SSH-device call, prompting for the operator token if the server rejects it.
+async function apiOp(method, path, body) {
+  try {
+    return await api(method, path, body);
+  } catch (e) {
+    if (e.status !== 401) throw e;
+    setOpToken('');
+    if (!askOpToken('The coordinator rejected the operator token.')) throw e;
+    return await api(method, path, body);
+  }
 }
 const who = () => ($('user').value || '').trim();
 function requireUser() {
@@ -378,6 +415,8 @@ let LAST_AGENTS = {};   // pc_ip -> agent, from the last refresh (for on-demand 
 let GUARDS = { guards: [], results: {} };  // /guards: definitions + per-PC check results
 let HEALTH = {};        // pc_ip -> /health row (BIOS + latest temps + 24h stats)
 let HEALTH_META = { sustain: 20, cpuHot: 85, gpuHot: 88 };  // overheat thresholds from /health
+let SSH = {};        // pc_ip -> agentless Linux device details (from /pcs)
+let CAN_STORE_SECRET = false;  // coordinator has SIM_SECRET_KEY (can remember a password)
 let FORGEJO = '';    // Forgejo base URL for deep links (from /config)
 let manifestObj = { pcs: {} };   // parsed manifest for the browser builder
 let browsePc = '';               // PC selected in the file browser
@@ -398,6 +437,8 @@ async function refresh() {
   HEALTH = {}; ((health && health.pcs) || []).forEach(p => HEALTH[p.pc_ip] = p);
   if (health) HEALTH_META = { sustain: health.hot_sustain_min || 20, cpuHot: health.cpu_hot_c || 85, gpuHot: health.gpu_hot_c || 88 };
   AGENT_ERRORS = {}; ((pcs && pcs.agents) || []).forEach(a => { if (a.error) AGENT_ERRORS[a.pc_ip] = a.error; });
+  SSH = (pcs && pcs.ssh) || {};
+  if (cfg) CAN_STORE_SECRET = !!cfg.secret_key;
   DISMISSED = (pcs && pcs.dismissed) || [];
   DEPLOYPROG = (pcs && pcs.deploy_progress) || {};
   // Resolve what training-live currently points at, so PC status shows the real
@@ -503,6 +544,11 @@ function fleetRows(pcs, agents) {
       rows.push({ ip: a.pc_ip, folder: a.folder || '', role: '—' }); seen.add(a.pc_ip);
     }
   });
+  // An SSH device enrolled but not yet added to the manifest still belongs in the list —
+  // that's how you get to its file browser to decide what it should carry.
+  Object.keys(SSH || {}).forEach(ip => {
+    if (!seen.has(ip) && !dismissed.has(ip)) { rows.push({ ip, folder: '', role: 'linux' }); seen.add(ip); }
+  });
   return rows;
 }
 
@@ -515,7 +561,8 @@ function setFleetRange(v) {
 }
 function toggleFleet(ip) {
   if (FLEET_OPEN.has(ip)) FLEET_OPEN.delete(ip);
-  else { FLEET_OPEN.add(ip); if (!fleetHist[ip]) fetchFleetHist(ip); }
+  // No sensor telemetry from an agentless device, so don't ask for a temperature history.
+  else { FLEET_OPEN.add(ip); if (!SSH[ip] && !fleetHist[ip]) fetchFleetHist(ip); }
   renderFleet(MANIFEST, LAST_AGENTS);
 }
 async function fetchFleetHist(ip) {
@@ -579,41 +626,79 @@ function fleetRow(p, a, guardCount) {
     ? (a.clean ? '<span class="ok">clean</span>'
                : '<span class="bad">dirty</span> <button class="ghost" style="padding:1px 6px;font-size:10px" onclick="event.stopPropagation();driftPc(\'' + esc(ip) + '\')">diff</button>')
     : '';
-  const host = p.host || h.host || '';
+  const ssh = SSH[ip];                       // set => agentless Linux device
+  const host = ssh ? (ssh.label || '') : (p.host || h.host || '');
   // WS-XX-XXX, optionally with a -role suffix (e.g. WS-25-024-display); case-insensitive.
-  const nameCls = host && !/^WS-\d{2}-\d{3}(-[a-z0-9]+)*$/i.test(host) ? 'bad' : 'muted';
+  // Skipped for SSH devices: that convention is for the sim's Windows workstations, and
+  // applying it to a Linux box would just paint every one of them red.
+  const nameCls = (!ssh && host && !/^WS-\d{2}-\d{3}(-[a-z0-9]+)*$/i.test(host)) ? 'bad' : 'muted';
   const name = host ? `<b>${esc(host)}</b> <span class="muted" style="font-size:11px">${esc(ip)}</span>`
                     : `<b>${esc(ip)}</b>`;
+  const kindPill = ssh ? ' <span class="pill" style="background:#ece9e0;color:#5b3ea6">linux</span>' : '';
   const sub = p.folder || h.folder || '';
   const modeCell = (a.mode === 'ERROR' && a.error)
     ? `<span class="pill error" style="cursor:pointer" title="Click to see the error" onclick="event.stopPropagation();showAgentError('${esc(ip)}')">ERROR ⚠</span>`
     : `<span class="pill ${mode.toLowerCase()}">${esc(mode)}</span>`;
   const chip = hotChip(h);
+  // Actions differ by transport: there is no agent binary to update, no Wake-on-LAN and
+  // no remote shutdown for a files-only SSH device.
+  const actions = ssh
+    ? `<option value="sshtest">Test connection</option>
+        <option value="sshkey">Re-install key</option>
+        <option value="sshremove">Remove device</option>`
+    : `<option value="update">Update agent</option>
+        <option value="wake">Wake on LAN</option>
+        <option value="shutdown">Force shut down</option>
+        <option value="remove">Remove from list</option>`;
+  const agentCell = ssh
+    ? `<span class="muted" style="font-size:11px">${esc((ssh.user || 'root') + '@' + ip + ':' + (ssh.port || 22))}</span>`
+    : `<span class="muted" style="font-size:11px">${esc(a.version || '—')}</span>`;
   const summary = `<tr class="fleet-row${h.overheating ? ' hot' : ''}" onclick="toggleFleet('${esc(ip)}')">
-    <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name} ${chip}
+    <td style="padding-left:20px"><span class="dot ${a.online ? 'on' : 'off'}"></span>${name}${kindPill} ${chip}
       ${sub ? `<br><span class="muted" style="font-size:11px;margin-left:15px">${esc(sub)}</span>` : ''}
       ${host && nameCls === 'bad' ? '<br><span class="bad" style="font-size:10px;margin-left:15px">name not WS-XX-XXX[-role]</span>' : ''}</td>
     <td>${modeCell}</td>
     <td>${esc(ref)}</td>
     <td>${state}</td>
     <td class="muted">${ago(a.last_seen)}</td>
-    <td><span class="muted" style="font-size:11px">${esc(a.version || '—')}</span>
+    <td>${agentCell}
       <select onclick="event.stopPropagation()" onchange="pcAction('${esc(ip)}',this)" style="font-size:11px;padding:2px 4px;border:1px solid #d3d1c7;border-radius:6px;background:#fff;cursor:pointer">
         <option value="">⋯ actions</option>
-        <option value="update">Update agent</option>
-        <option value="wake">Wake on LAN</option>
-        <option value="shutdown">Force shut down</option>
-        <option value="remove">Remove from list</option>
+        ${actions}
       </select>
       <span class="chev ${open ? 'open' : ''}">▶</span></td>
   </tr>`;
   if (!open) return summary;
+  // An SSH device has neither sensors nor the Windows guard scripts, so its expanded row
+  // shows the connection instead — and no temperature chart at all.
+  if (ssh) {
+    return summary + `<tr class="fleet-detail"><td colspan="6"><div class="fleet-detail-inner">
+      <div style="flex:1 1 340px">${sshDetail(ip, ssh)}</div>
+      <div style="flex:1 1 300px"><div class="kv"><b>Configuration checks</b></div>
+        <div class="hint">Guards are Windows PowerShell checks and don't apply to a Linux device.</div></div>
+    </div></td></tr>`;
+  }
   return summary + `<tr class="fleet-detail"><td colspan="6"><div class="fleet-detail-inner">
     <div style="flex:1 1 340px">${fleetHardware(h, fleetHist[ip])}</div>
     <div style="flex:1 1 300px">${fleetChecks(ip, guardCount)}</div>
   </div>
   <div id="chart-${ip}" style="margin-top:14px">${chartInner(ip)}</div>
   </td></tr>`;
+}
+
+// Connection panel for an agentless Linux device (replaces the hardware/temperature one).
+function sshDetail(ip, d) {
+  const row = (k, v, cls) => `<div class="kv"><span class="muted">${esc(k)}</span> <span class="${cls || ''}">${esc(v || '—')}</span></div>`;
+  return `<div class="kv"><b>SSH device</b></div>
+    ${row('Address', (d.user || 'root') + '@' + ip + ':' + (d.port || 22))}
+    ${row('Auth', d.auth === 'key' ? 'key installed by the coordinator' : 'password')}
+    ${row('OS', d.os_pretty)}
+    ${row('Kernel', d.kernel)}
+    ${row('Host key', d.fingerprint)}
+    ${row('Password stored', d.password_stored ? 'yes (encrypted)' : 'no')}
+    ${row('Last connected', d.last_ok ? ago(d.last_ok) : 'never')}
+    ${d.last_error ? `<div class="kv"><span class="muted">Last error</span> <span class="bad">${esc(d.last_error)}</span></div>` : ''}
+    <div class="hint" style="margin-top:8px">Files only — the coordinator never starts or stops anything on this device.</div>`;
 }
 
 // Hardware & temperature panel for the expanded row.
@@ -938,7 +1023,7 @@ async function doPromote() {
   }
 }
 function bootstrapAction(pc, path, label) {
-  api('POST', path, {})
+  apiOp('POST', path, {})
     .then(() => { toast(label + ' running on ' + pc + '…'); pollBootstrap(pc); })
     .catch(e => toast(e.message, true));
 }
@@ -962,15 +1047,118 @@ const updateAllAgents = () => confirm('Request a self-update on every PC?') && a
 const forgetPc = ip => confirm('Remove ' + ip + ' from PC status? It reappears automatically if that PC\'s agent checks in again.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/forget', {}), ip + ' removed from PC status');
 const wakePc = ip => act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/wake', {}), 'Wake-on-LAN packet sent to ' + ip + ' — it should power on shortly');
 const shutdownPc = ip => confirm('Force shut down ' + ip + '? Running apps are killed and the PC powers off immediately. Its agent must be online to receive this.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/shutdown', {}), 'Force shutdown sent to ' + ip);
+// --- add a Linux device (SSH enrollment) ---
+let sshBusy = false;
+const INPUT_CSS = 'width:100%;padding:8px;border:1px solid #d3d1c7;border-radius:8px;box-sizing:border-box';
+function addSshDevice() {
+  sshBusy = false;
+  $('ssh-title').textContent = 'Add a Linux device';
+  const lbl = t => `<label style="display:block;font-size:13px;margin:10px 0 4px">${t}</label>`;
+  $('ssh-body').innerHTML =
+    '<div class="hint" style="margin-bottom:6px">The coordinator connects over SSH with this password once, ' +
+    'installs its own key, and uses the key from then on. No agent is installed on the device.</div>' +
+    '<div style="display:flex;gap:8px">' +
+      `<div style="flex:2">${lbl('IP address')}<input id="ssh-ip" style="${INPUT_CSS}" placeholder="70.84.68.42"></div>` +
+      `<div style="flex:1">${lbl('Port')}<input id="ssh-port" style="${INPUT_CSS}" value="22"></div>` +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      `<div style="flex:1">${lbl('User')}<input id="ssh-user" style="${INPUT_CSS}" value="root"></div>` +
+      `<div style="flex:1">${lbl('Password')}<input id="ssh-pass" type="password" style="${INPUT_CSS}"></div>` +
+    '</div>' +
+    `${lbl('Name (optional)')}<input id="ssh-label" style="${INPUT_CSS}" placeholder="defaults to the OS name">` +
+    '<label style="display:block;font-size:12px;margin:12px 0 0;color:' + (CAN_STORE_SECRET ? '#2c2c2a' : '#908e86') + '">' +
+      '<input type="checkbox" id="ssh-remember"' + (CAN_STORE_SECRET ? '' : ' disabled') + '> ' +
+      'Remember the password (encrypted on the Pi)' +
+    '</label>' +
+    '<div class="hint" style="margin-top:2px">' +
+      (CAN_STORE_SECRET
+        ? 'Only needed to re-install the key later if the device is rebuilt.'
+        : 'Unavailable: SIM_SECRET_KEY is not set in /etc/sim-config.env on the coordinator.') +
+    '</div>' +
+    '<div id="ssh-result" style="margin-top:12px"></div>' +
+    '<div class="row-actions" style="margin-top:14px">' +
+      '<button class="ghost" onclick="doSshTest()">Test connection</button>' +
+      '<button onclick="doSshAdd()">Add device</button>' +
+    '</div>';
+  $('ssh-modal').style.display = 'flex';
+  setTimeout(() => { const e = $('ssh-ip'); if (e) e.focus(); }, 40);
+}
+function closeSsh() { if (!sshBusy) $('ssh-modal').style.display = 'none'; }
+function sshForm() {
+  return {
+    ip: ($('ssh-ip').value || '').trim(),
+    port: parseInt($('ssh-port').value, 10) || 22,
+    user: ($('ssh-user').value || 'root').trim(),
+    password: $('ssh-pass').value,
+    label: ($('ssh-label').value || '').trim() || null,
+    remember: !!($('ssh-remember') || {}).checked,
+  };
+}
+function sshSay(html, isErr) {
+  $('ssh-result').innerHTML = `<div class="${isErr ? 'bad' : 'ok'}" style="font-size:12px;white-space:pre-wrap">${html}</div>`;
+}
+async function doSshTest() {
+  const f = sshForm();
+  if (!f.ip) return sshSay('Enter an IP address first.', true);
+  if (!OPTOKEN && !askOpToken('Adding a Linux device needs the operator token.')) return;
+  sshBusy = true; sshSay('Connecting…');
+  try {
+    const r = await apiOp('POST', '/ssh-devices/test', f);
+    const c = r.caps || {};
+    sshSay('✓ ' + esc(r.user || f.user) + '@' + esc(f.ip) + ':' + f.port +
+           '\n' + esc(r.os_pretty || '') + '  ' + esc(r.kernel || '') + '  ' + esc(r.arch || '') +
+           '\nsftp ' + (c.sftp ? '✓' : '✗') + '   rsync ' + (c.rsync ? '✓' : '✗') +
+           '\nhost key ' + esc(r.fingerprint || ''));
+  } catch (e) { sshSay('✗ ' + esc(e.message), true); }
+  finally { sshBusy = false; }
+}
+async function doSshAdd() {
+  const f = sshForm();
+  if (!f.ip) return sshSay('Enter an IP address first.', true);
+  if (!f.password) return sshSay('A password is required to install the key.', true);
+  if (!OPTOKEN && !askOpToken('Adding a Linux device needs the operator token.')) return;
+  sshBusy = true; $('ssh-close').style.display = 'none'; sshSay('Connecting and installing the key…');
+  try {
+    const r = await apiOp('POST', '/ssh-devices', f);
+    sshSay('✓ added ' + esc(f.ip) +
+           '\n' + esc(r.os_pretty || '') + '  ' + esc(r.kernel || '') +
+           '\nkey ' + esc(r.key_installed) + (r.created_ssh_dir ? ' (created ~/.ssh)' : '') +
+           '\npassword ' + (r.password_stored ? 'stored, encrypted' : 'not stored'));
+    await refresh();
+    setTimeout(() => {
+      sshBusy = false; $('ssh-close').style.display = ''; closeSsh();
+      toast(f.ip + ' added — pick its directories in Load Configuration → File browser');
+      showMainTab('fleet');
+    }, 1400);
+  } catch (e) {
+    sshBusy = false; $('ssh-close').style.display = '';
+    sshSay('✗ ' + esc(e.message), true);
+  }
+}
+
+// --- agentless Linux device actions ---
+const testSsh = ip => act(async () => {
+  const r = await apiOp('POST', '/ssh-devices/' + encodeURIComponent(ip) + '/test', {});
+  return r;
+}, 'Connected to ' + ip);
+const rekeySsh = ip => act(async () => {
+  const r = await apiOp('POST', '/ssh-devices/' + encodeURIComponent(ip) + '/reinstall-key', {});
+  return r;
+}, 'Key re-installed on ' + ip);
+const removeSsh = ip => confirm('Remove ' + ip + ' from the fleet?\n\nIts stored credentials and the ' +
+  'coordinator\'s private key are deleted. The public key stays in that device\'s ' +
+  'authorized_keys — remove it there if you want it gone.')
+  && act(() => apiOp('DELETE', '/ssh-devices/' + encodeURIComponent(ip)), ip + ' removed');
 // PC status per-row action dropdown -> dispatch, then reset so the same item re-fires.
 function pcAction(ip, sel) {
   const v = sel.value; sel.value = '';
-  ({ update: updateAgent, wake: wakePc, shutdown: shutdownPc, remove: forgetPc }[v] || (() => {}))(ip);
+  ({ update: updateAgent, wake: wakePc, shutdown: shutdownPc, remove: forgetPc,
+     sshtest: testSsh, sshkey: rekeySsh, sshremove: removeSsh }[v] || (() => {}))(ip);
 }
 async function driftPc(ip) {
   showDriftModal(ip, null);                       // loading state
   try {
-    const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/drift');
+    const d = await apiOp('GET', '/agents/' + encodeURIComponent(ip) + '/drift');
     showDriftModal(ip, d.entries || []);
   } catch (e) { showDriftModal(ip, undefined, e.message); }
 }
@@ -1175,7 +1363,7 @@ async function showFileDiff(idx) {
   $('drift-title').textContent = 'Diff — ' + e.path;
   $('drift-body').innerHTML = '<div class="muted">Loading diff…</div>';
   try {
-    const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/filediff?app=' +
+    const d = await apiOp('GET', '/agents/' + encodeURIComponent(ip) + '/filediff?app=' +
       encodeURIComponent(e.app) + '&path=' + encodeURIComponent(e.path));
     renderFileDiff(e, d);
   } catch (err) { $('drift-body').innerHTML = backToDrift() + '<div class="bad">' + esc(err.message) + '</div>'; }
@@ -1375,7 +1563,7 @@ async function reviewChanges() {
   if (!ips.length) { $('drift-body').innerHTML = '<div class="muted">No PCs in this load.</div>'; return; }
   reviewDrift = {};
   const results = await Promise.all(ips.map(async ip => {
-    try { const d = await api('GET', '/agents/' + encodeURIComponent(ip) + '/drift'); reviewDrift[ip] = d.entries || []; return { ip, entries: d.entries || [] }; }
+    try { const d = await apiOp('GET', '/agents/' + encodeURIComponent(ip) + '/drift'); reviewDrift[ip] = d.entries || []; return { ip, entries: d.entries || [] }; }
     catch (e) { return { ip, error: e.message }; }
   }));
   renderReview(ref, cfg, results);
@@ -1438,7 +1626,7 @@ async function deployAsDevLoad() {
     '<div id="dl-status" class="hint" style="margin-top:10px"></div></div>';
   $('devload-modal').style.display = 'flex';
   try {
-    for (const ip of pcs) { importStarting.add(ip); try { await api('POST', '/import/' + encodeURIComponent(ip), {}); } catch (e) { importStarting.delete(ip); dlStatus('import on ' + ip + ' failed: ' + esc(e.message), 'bad'); } }
+    for (const ip of pcs) { importStarting.add(ip); try { await apiOp('POST', '/import/' + encodeURIComponent(ip), {}); } catch (e) { importStarting.delete(ip); dlStatus('import on ' + ip + ' failed: ' + esc(e.message), 'bad'); } }
     for (let i = 0; i < 3600; i++) {
       let boot, ready;
       try { boot = await api('GET', '/bootstrap'); } catch (e) {}
@@ -1515,7 +1703,7 @@ function renderDevStepper(r, prog) {
   }
 }
 function devImport(pc) {
-  api('POST', '/import/' + encodeURIComponent(pc), {})
+  apiOp('POST', '/import/' + encodeURIComponent(pc), {})
     .then(() => {
       importStarting.add(pc);                       // show "starting…" until upload begins
       renderDevStepper(LAST_READY, LAST_PROG);      // reflect it immediately
@@ -1590,12 +1778,21 @@ async function renderBrowserFromManifest() {
   Object.keys(manifestObj.pcs).forEach(ip => {
     seen.add(ip);
     const o = document.createElement('option');
-    o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')';
+    o.value = ip; o.textContent = ip + ' (' + (manifestObj.pcs[ip].folder || '') + ')'
+      + (SSH[ip] ? ' · linux' : '');
     sel.appendChild(o);
   });
   agents.filter(a => a.online && !seen.has(a.pc_ip)).forEach(a => {
+    seen.add(a.pc_ip);
     const o = document.createElement('option');
     o.value = a.pc_ip; o.textContent = a.pc_ip + ' — online, not in manifest';
+    sel.appendChild(o);
+  });
+  // A Linux device enrolled but not yet in the manifest: browsing it is exactly how you
+  // decide what it should carry, so it has to be reachable from this dropdown.
+  Object.keys(SSH || {}).filter(ip => !seen.has(ip)).forEach(ip => {
+    const o = document.createElement('option');
+    o.value = ip; o.textContent = ip + ' — linux, not in manifest';
     sel.appendChild(o);
   });
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
@@ -1630,7 +1827,10 @@ function loadSelectedFromManifest() {
 }
 
 async function browseDir(path) {
-  return api('GET', '/agents/' + encodeURIComponent(browsePc) + '/browse?path=' + encodeURIComponent(path));
+  // Same endpoint and same response shape for both transports — the coordinator answers
+  // over SFTP for a Linux device and asks the agent for a Windows PC. apiOp so browsing
+  // a Linux box prompts for the operator token if it isn't set yet.
+  return apiOp('GET', '/agents/' + encodeURIComponent(browsePc) + '/browse?path=' + encodeURIComponent(path));
 }
 async function reloadTree() {
   const t = $('tree'); t.innerHTML = '';

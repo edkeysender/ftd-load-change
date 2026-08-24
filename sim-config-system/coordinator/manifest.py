@@ -34,6 +34,24 @@ def pc_folder(pc_ip, ref=None):
     return _manifest(ref).get("pcs", {}).get(pc_ip, {}).get("folder")
 
 
+def pc_transport(pc_ip, ref=None):
+    """How the coordinator reaches this PC: "agent" (a Windows PC running the Go agent,
+    the default and every pre-existing entry) or "ssh" (an agentless Linux device the
+    coordinator drives itself).
+
+    Read per-ref like everything else here, so a device that was an agent PC at v1.0 and
+    an SSH device at v1.3 deploys correctly at both.
+    """
+    spec = _manifest(ref).get("pcs", {}).get(pc_ip) or {}
+    return (spec.get("transport") or "agent").strip().lower()
+
+
+def ssh_pcs(ref=None):
+    """IPs in the manifest that are managed over SSH."""
+    return [ip for ip, spec in (_manifest(ref).get("pcs") or {}).items()
+            if ((spec or {}).get("transport") or "agent").strip().lower() == "ssh"]
+
+
 def load_global_ignore():
     """The global-ignore glob list — applies to every app on every PC. Reads the
     writable file, falling back to the bundled seed. Always a list of strings."""

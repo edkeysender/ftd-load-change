@@ -7,13 +7,26 @@
 #   - Prepar3D is CONFIG ONLY; its install/scenery is NOT versioned (Clonezilla handles full recovery).
 #   - One whole-sim version. One folder per PC. Coordinator is the sole git writer.
 #
+# Field reference per PC:
+#   folder:            this PC's directory in the monorepo
+#   role:              free-text label shown in the UI
+#   transport:         "agent" (default, and every entry below) = a Windows PC running the
+#                      Go agent. "ssh" = an agentless Linux device the coordinator drives
+#                      itself over SFTP; enrol it in Fleet -> "+ Linux device" (credentials
+#                      live in the coordinator's DB, never here — this file is committed to
+#                      git and pushed to a public repo).
+#
 # Field reference per app:
 #   live:              one or more directories the running app reads/writes (mirror target on deploy)
+#                      For transport: ssh these are POSIX paths, and deploy mirrors WITH
+#                      DELETIONS as root — so they must be at least two segments deep
+#                      ("/opt/myapp", never "/opt"). See README "Linux devices".
 #   repo:              path inside the monorepo where this app's tree is versioned
-#   run:               executable launched by the agent
+#   run:               executable launched by the agent (IGNORED for transport: ssh —
+#                      those deploys are files-only and never start anything)
 #   start_delay:       seconds to wait before launching (preserves launcher.json ordering)
 #   restart_on_change: restart the app when its versioned files change (mainly used in DEV_TRACKING)
-#   exclude:           glob denylist of junk never committed
+#   exclude:           glob denylist of junk never committed (also never deleted on deploy)
 #
 # RECONCILE-AT-BOOTSTRAP (flagged, do not guess):
 #   - pc-12 displays RUN from D:/prosim/ProSim-training/ProSimDisplay/... but launcher.json
