@@ -16,8 +16,15 @@ type savedLoad struct {
 	Apps map[string]AppSpec `json:"apps"`
 }
 
+// stateDir is where the agent keeps the small files it owns (the adopted load, the
+// last-known-good coordinator): the parent of the repo clone, i.e. C:\sim-agent by
+// default — the same directory the exe and the sensor DLLs already live in.
+func stateDir(cfg AgentConfig) string {
+	return filepath.Dir(cfg.RepoPath)
+}
+
 func (a *Agent) stateFile() string {
-	return filepath.Join(filepath.Dir(a.cfg.RepoPath), "sim-agent-load.json")
+	return filepath.Join(stateDir(a.cfg), "sim-agent-load.json")
 }
 
 // saveLoad records the currently-adopted load. Best-effort; failures are ignored.

@@ -140,3 +140,32 @@ It prints the `git_remote` URL (e.g. `http://70.84.68.196:3000/sim/sim-config.gi
 Put that in each PC's `agent.json` as `git_remote`, set `repo_path` (e.g. `D:/sim-config`)
 and `git_exe` (`git` if on PATH, or a bundled portable git), then deploy from the web UI
 or `curl -X POST http://localhost:8090/deploy`.
+
+## If the Pi's address changes
+
+The coordinator URL is compiled into `simagent.exe`, so a new Pi IP used to strand the
+whole fleet: every agent sat retrying a dead address, invisible in the dashboard and
+unable to self-update (that path goes through the same URL). The agent now recovers on
+its own. When the coordinator stops answering it:
+
+1. retries the addresses it knows, best first — `agent.json`, then the last address that
+   actually worked (`C:\sim-agent\coordinator.json`), then the baked-in build value;
+2. after 3 failed rounds, **sweeps its own /24** for a host answering like a coordinator
+   on the same port, and adopts it once `/whoami` confirms it (re-scanning at most every
+   5 minutes). The sweep fingerprints hosts *without* sending the shared token;
+3. accepts an address typed at the console at any point — **press Enter** and it prompts
+   for a host, `host:port`, or full URL. Enter alone (or 60s of silence) keeps the current
+   address and goes back to retrying, so an unattended PC never blocks on the prompt.
+
+Whatever finally answers is saved to `C:\sim-agent\coordinator.json`, so the next start
+connects on the first try. That file is agent-owned — delete it to fall back to the baked
+value; an `agent.json` `coordinator_url` still overrides everything.
+
+An agent that was already running when the Pi moved does the same thing after polling has
+failed solidly for 5 minutes, so a live fleet recovers without a reboot.
+
+> Only new builds have this. Agents already stranded on an old address can't fetch the
+> fix — bring them back first (e.g. temporarily add the old IP to the Pi with
+> `sudo ip addr add <old-ip>/24 dev eth0`), push the new build with "Update all agents",
+> then drop the alias.
+

@@ -8,13 +8,13 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
+	"sync"
 	"time"
 )
 
 type Client struct {
+	mu    sync.RWMutex // guards base: it changes if the coordinator moves mid-run
 	base  string
 	token string
 	pcIP  string
@@ -66,31 +66,8 @@ func localIPv4s() []string {
 	return ips
 }
 
-// Whoami asks the coordinator for our identity + manifest folder. We send our local
-// IPv4s as candidates so a dual-homed PC resolves to its manifest IP deterministically
-// (folder may be empty if the PC isn't in the manifest).
-func (c *Client) Whoami() (ip, folder string, err error) {
-	path := "/whoami"
-	if cands := localIPv4s(); len(cands) > 0 {
-		path += "?candidates=" + url.QueryEscape(strings.Join(cands, ","))
-	}
-	resp, err := c.do("GET", path, nil)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", "", fmt.Errorf("whoami: %s", resp.Status)
-	}
-	var out struct {
-		IP     string `json:"ip"`
-		Folder string `json:"folder"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", "", err
-	}
-	return out.IP, out.Folder, nil
-}
+// (/whoami lives in coordinator.go as probeWhoami: identity is resolved against a
+// candidate address on a short-timeout client, before any long-lived client exists.)
 
 func NewClient(cfg AgentConfig) *Client {
 	return &Client{
@@ -102,13 +79,29 @@ func NewClient(cfg AgentConfig) *Client {
 	}
 }
 
+// SetBase repoints the client at a different coordinator. Called when the Pi's
+// address changes under a running agent (see recoverCoordinator): swapping the URL
+// in place keeps every existing *Client holder — heartbeat, health loop, poll loop —
+// pointing at the same object instead of racing on a replaced pointer.
+func (c *Client) SetBase(url string) {
+	c.mu.Lock()
+	c.base = url
+	c.mu.Unlock()
+}
+
+func (c *Client) Base() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.base
+}
+
 func (c *Client) do(method, path string, body any) (*http.Response, error) {
 	var r io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
 		r = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, c.base+path, r)
+	req, _ := http.NewRequest(method, c.Base()+path, r)
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 	return c.http.Do(req)

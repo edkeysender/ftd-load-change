@@ -5,6 +5,7 @@
 
   "_pc_ip": "force a specific identity instead of the IP the coordinator sees (rarely needed)",
   "_coordinator_url": "override the baked-in coordinator, e.g. http://70.84.68.196:8090",
+  "_coordinator_recovery": "if the coordinator stops answering, the agent retries, then sweeps its own /24 for it, and an operator at the console can press Enter and type a new address. Whatever answers is remembered in C:/sim-agent/coordinator.json (agent-owned - delete it to fall back to the baked-in value). A coordinator_url set here still wins over both.",
   "_token": "override the baked-in shared token",
   "_repo_path": "local sparse clone path (default C:/sim-agent/repo)",
   "_git_exe": "git.exe path (default 'git' on PATH)",
