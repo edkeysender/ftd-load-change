@@ -10,9 +10,15 @@ package main
 import (
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
+
+// coordinatorLostAfter is how long polling has to fail solidly before we conclude the
+// coordinator has moved rather than bounced, and go looking for it again. Long enough to
+// ride out a Pi reboot or a service restart.
+const coordinatorLostAfter = 5 * time.Minute
 
 type Agent struct {
 	cfg AgentConfig
@@ -39,7 +45,7 @@ func main() {
 	}
 
 	cleanupOldBinary()              // remove leftover .old from a prior self-update
-	cfg := LoadConfig("agent.json") // optional; baked defaults fill the rest
+	cfg := LoadConfig(configPath()) // optional; baked defaults fill the rest
 	resolveConfig(&cfg)
 	a := &Agent{cfg: cfg, state: StateUnseeded, api: NewClient(cfg), clean: true}
 	for _, arg := range os.Args[1:] {
@@ -50,43 +56,54 @@ func main() {
 	a.Run()
 }
 
+// configPath locates the optional agent.json NEXT TO THE EXE. It used to be read from
+// the process CWD, which the logon task leaves at C:\Windows\System32 — so the one
+// documented escape hatch for a moved coordinator was silently ignored there. The
+// CWD-relative path stays as a fallback for a hand-run agent.
+func configPath() string {
+	if exe, err := os.Executable(); err == nil {
+		p := filepath.Join(filepath.Dir(exe), "agent.json")
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "agent.json"
+}
+
 // resolveConfig fills anything agent.json didn't specify: coordinator + token from
 // the baked-in build values, sane path defaults, and identity (pc_ip + folder)
 // auto-detected from the coordinator via /whoami. Result: drop the exe on a PC and
 // run it — no config file needed.
 func resolveConfig(cfg *AgentConfig) {
-	if cfg.CoordinatorURL == "" {
-		cfg.CoordinatorURL = DefaultCoordinator
-	}
 	if cfg.Token == "" {
 		cfg.Token = DefaultToken
 	}
 	if cfg.RepoPath == "" {
-		cfg.RepoPath = "C:/sim-agent/repo"
+		cfg.RepoPath = "C:/sim-agent/repo" // also fixes the state dir the candidates live in
 	}
 	// Leave GitExe empty unless explicitly set in agent.json — an empty value lets
 	// gitExe() locate git (PATH, standard installs, or the portable Installs bundle).
 	// Defaulting it to "git" here short-circuited all of that.
-	if cfg.CoordinatorURL == "" {
+
+	// agent.json first, then the last address that worked, then the baked-in default
+	// (see coordinator.go). Call this BEFORE defaulting CoordinatorURL, or an explicit
+	// override becomes indistinguishable from the build value.
+	cands := coordinatorCandidates(*cfg)
+	if len(cands) == 0 {
 		panic("no coordinator URL: provide agent.json or build with -ldflags -X main.DefaultCoordinator=...")
 	}
+	cfg.CoordinatorURL = cands[0]
 	if cfg.PCIP != "" {
 		return // explicit identity wins
 	}
-	// Auto-identity: ask the coordinator what IP it sees us as. Retry until reachable.
-	for {
-		ip, folder, err := NewClient(*cfg).Whoami()
-		if err == nil && ip != "" {
-			cfg.PCIP = ip
-			if cfg.Folder == "" {
-				cfg.Folder = folder
-			}
-			log.Printf("identity from coordinator: %s (folder=%q)", ip, cfg.Folder)
-			return
-		}
-		log.Printf("waiting for coordinator instructions — %s not reachable yet, retrying…", cfg.CoordinatorURL)
-		time.Sleep(3 * time.Second)
+	// Auto-identity: find a coordinator that answers — retrying, sweeping the local
+	// subnet, or taking an address typed at the console — then adopt what it tells us.
+	ip, folder := resolveCoordinator(cfg, cands)
+	cfg.PCIP = ip
+	if cfg.Folder == "" {
+		cfg.Folder = folder
 	}
+	log.Printf("identity from coordinator %s: %s (folder=%q)", cfg.CoordinatorURL, ip, cfg.Folder)
 }
 
 func (a *Agent) Run() {
@@ -146,14 +163,25 @@ func (a *Agent) Run() {
 		}
 	}
 
+	// downSince tracks an unbroken run of poll failures, so a coordinator that MOVED
+	// (new Pi IP) is told apart from one that is merely rebooting. Timed rather than
+	// counted: a failing poll returns anywhere between instantly and ~20s.
+	var downSince time.Time
 	for {
-		a.checkAndUpdate() // react to an "update" click on a running agent too
+		a.checkAndUpdate()             // react to an "update" click on a running agent too
 		cmd, err := a.api.PollCommand() // long-poll
 		if err != nil {
 			log.Printf("poll error: %v", err)
+			if downSince.IsZero() {
+				downSince = time.Now()
+			} else if down := time.Since(downSince); down >= coordinatorLostAfter {
+				downSince = time.Time{}
+				a.recoverCoordinator(down)
+			}
 			time.Sleep(3 * time.Second)
 			continue
 		}
+		downSince = time.Time{}
 		if cmd == nil {
 			continue
 		}
