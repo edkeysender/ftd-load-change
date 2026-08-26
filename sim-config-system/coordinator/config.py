@@ -90,9 +90,11 @@ SSH_DIR = Path(os.environ.get("SIM_SSH_DIR", str(DB_PATH.parent / "ssh")))
 SSH_POLL_SECONDS = int(os.environ.get("SIM_SSH_POLL_SECONDS", "15"))
 SSH_CONNECT_TIMEOUT = int(os.environ.get("SIM_SSH_CONNECT_TIMEOUT", "10"))
 
-# How often to recompute `clean` (drift) for SSH devices; 0 disables. The Windows agent
-# effectively does this on every heartbeat; over SSH it is far more expensive.
-SSH_DRIFT_SECONDS = int(os.environ.get("SIM_SSH_DRIFT_SECONDS", "300"))
+# Minimum gap between drift (clean/dirty) checks for one SSH device; 0 disables them.
+# A check is a local walk plus one SFTP walk — sub-second for a normal config tree — so
+# this is a floor, not a fixed period: ssh_ops widens it to 10x whatever the last check
+# actually cost, letting a big tree back off by itself.
+SSH_DRIFT_SECONDS = int(os.environ.get("SIM_SSH_DRIFT_SECONDS", "30"))
 
 # Deploy mirrors repo -> device WITH deletions, as root. These bound the blast radius of
 # a misconfigured live path or an empty repo folder: a plan exceeding either limit is

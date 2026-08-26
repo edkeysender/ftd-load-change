@@ -46,10 +46,6 @@ def pc_transport(pc_ip, ref=None):
     return (spec.get("transport") or "agent").strip().lower()
 
 
-def ssh_pcs(ref=None):
-    """IPs in the manifest that are managed over SSH."""
-    return [ip for ip, spec in (_manifest(ref).get("pcs") or {}).items()
-            if ((spec or {}).get("transport") or "agent").strip().lower() == "ssh"]
 
 
 def load_global_ignore():

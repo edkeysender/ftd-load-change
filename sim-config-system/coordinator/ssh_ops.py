@@ -236,6 +236,62 @@ def reinstall_key(pc_ip: str, password: str | None = None) -> dict:
             "key_installed": "already present" if installed["already_present"] else "added"}
 
 
+def reauth(pc_ip: str, user=None, port=None, password=None, remember=False,
+           accept_host_key=False) -> dict:
+    """Re-authenticate an enrolled device: change the login, port or host key in place.
+
+    Covers what 'Re-install key' cannot — a device rebuilt with a new host key (which
+    correctly refuses to connect until someone confirms it), a changed password, or
+    moving to an account with different filesystem permissions. Without this the only
+    route is Remove + re-add, which throws away the device's label and history.
+
+    The keypair is per-device, so the same key is installed for the new account. The old
+    account keeps its copy in authorized_keys — we can no longer be sure of reaching it
+    to clean up, and the caller is told so.
+    """
+    dev = _device(pc_ip)
+    prev_user = dev.get("user") or "root"
+    user = (user or prev_user).strip()
+    port = int(port or dev.get("port") or 22)
+    if not password:
+        raise SSHError("a password is required to re-authenticate — it installs the key")
+    if remember and not secretbox.available():
+        raise SSHError(
+            "cannot remember the password: SIM_SECRET_KEY is not set in /etc/sim-config.env."
+        )
+    # Only skip the pinned host key when the operator explicitly accepted the change.
+    expected = None if accept_host_key else dev.get("fingerprint")
+    info = ssh_transport.probe(pc_ip, port, user, password=password,
+                               expected_fp=expected, accept_new=True)
+    fp = info["fingerprint"]
+    changed_host_key = bool(dev.get("fingerprint")) and fp != dev.get("fingerprint")
+
+    priv, pub_line = ssh_transport.generate_keypair(pc_ip, f"{_KEY_COMMENT}@{_hostname()}")
+    installed = ssh_transport.install_key(pc_ip, port, user, password, pub_line,
+                                          expected_fp=fp)
+    ssh_transport.verify_key_auth(pc_ip, port, user, priv, fp)
+
+    db.update_ssh_auth(pc_ip, user=user, port=port, auth="key", key_path=str(priv),
+                       fingerprint=fp,
+                       secret=secretbox.encrypt(password) if remember else None)
+    db.upsert_ssh_device(pc_ip, port=port, user=user, auth="key",
+                         os_pretty=info.get("os_pretty"), kernel=info.get("kernel"),
+                         caps=info.get("caps"))
+    db.touch_ssh_device(pc_ip, ok=True)
+    ssh_transport.drop(pc_ip)     # force the pool to reconnect with the new credentials
+
+    note = None
+    if user != prev_user:
+        note = (f"Switched from {prev_user} to {user}. The coordinator's key is still in "
+                f"{prev_user}'s authorized_keys on the device — remove it there if you "
+                f"want it gone.")
+    return {"ok": True, "user": user, "port": port,
+            "os_pretty": info.get("os_pretty"), "kernel": info.get("kernel"),
+            "fingerprint": fp, "host_key_changed": changed_host_key,
+            "key_installed": "already present" if installed["already_present"] else "added",
+            "password_stored": bool(remember), "note": note}
+
+
 def forget(pc_ip: str) -> dict:
     """Un-enrol: close the connection, drop the credentials, delete the key.
 
@@ -528,6 +584,26 @@ def _check_delete_budget(plans, confirm_delete: bool):
         )
 
 
+def _check_writable(sess, pc_ip: str, dsts):
+    """Fail before touching anything if the SSH user can't write where it must.
+
+    Deploy replaces files in place; discovering half way through that the account has no
+    write access leaves the device in a mixed state, and the raw SFTP error
+    ("[Errno 13] Permission denied") names neither the path nor the user.
+    """
+    user = (db.ssh_device(pc_ip) or {}).get("user") or "the SSH user"
+    for dst in sorted(set(dsts)):
+        target = dst if sess.isdir(dst) else posixpath.dirname(dst)
+        reason = sess.check_writable(target)
+        if reason:
+            raise SSHError(
+                f"{user} cannot write to {target} on {pc_ip} ({reason}). "
+                f"Either give {user} ownership of that directory "
+                f"(sudo chown -R {user} {target}), or remove the device and re-add it "
+                f"as a user that can write there, such as root."
+            )
+
+
 def _apply_mirror(sess, plan, dst: str):
     copied = 0
     for item in plan["copy"]:
@@ -626,6 +702,7 @@ def deploy(pc_ip: str, ref: str | None = None, confirm_delete: bool = False) -> 
                 pairs.append((dst, plan))
                 plans.append(plan)
             _check_delete_budget(plans, confirm_delete)
+            _check_writable(sess, pc_ip, [d for d, _p in pairs])
             for dst, plan in pairs:
                 c, d = _apply_mirror(sess, plan, dst)
                 copied += c
@@ -646,9 +723,12 @@ def deploy_async_all(ips, ref: str):
     ips = list(ips)
     if not ips:
         return
-    git_ops.deploy_worktree(ref)   # materialise once, before the workers race for it
 
     def run():
+        # Materialise the ref once, here rather than in the caller: checking out and
+        # running `lfs pull` on a large load takes long enough to hold up the HTTP
+        # response to /deploy if done on the request thread.
+        git_ops.deploy_worktree(ref)
         with ThreadPoolExecutor(max_workers=config.SSH_DEPLOY_WORKERS) as pool:
             for ip in ips:
                 pool.submit(deploy, ip, ref)
@@ -686,8 +766,28 @@ def drift(pc_ip: str) -> dict:
                                 "path": d["rel"], "mtime": d["live_mtime"]})
             # A huge drift means "resync", not "read the list" — same cap as the agent.
             if len(entries) >= 1000:
-                return {"entries": entries[:1000]}
+                entries = entries[:1000]
+                break
+    # We just measured the truth, so keep the Fleet clean/dirty pill honest. This makes
+    # the dashboard's "diff" button double as a refresh, instead of showing changed files
+    # next to a row that still claims the device is clean.
+    _record_clean(pc_ip, not entries)
     return {"entries": entries}
+
+
+def _record_clean(pc_ip: str, clean: bool):
+    """Update just the clean flag of a deployed device, leaving mode and ref alone.
+
+    Only meaningful once something has been deployed: a device that was never deployed
+    has nothing to be clean or dirty against, and must not be promoted to TRAINING here.
+    """
+    row = next((a for a in db.list_agents() if a["pc_ip"] == pc_ip), None)
+    if not row or row.get("mode") != "TRAINING":
+        return
+    if bool(row.get("clean")) == clean:
+        return
+    db.upsert_agent(pc_ip, row.get("folder") or "", "TRAINING", row.get("current_ref"),
+                    clean, kind="ssh")
 
 
 def _norm_live(live: str) -> str:
@@ -752,6 +852,7 @@ _poller_started = False
 _fail_counts: dict = {}
 _next_attempt: dict = {}
 _last_drift_at: dict = {}
+_drift_cost: dict = {}      # pc_ip -> seconds the last drift check took (drives the interval)
 
 
 def start_poller():
@@ -811,25 +912,34 @@ def _poll_once():
 
 
 def _maybe_refresh_drift(pc_ip: str):
-    """Keep `clean` roughly honest. The Windows agent recomputes it on every heartbeat;
-    over SSH that is far too expensive, so this runs on a slow timer (0 = off)."""
+    """Keep the Fleet clean/dirty flag current. The Windows agent recomputes this on
+    every heartbeat; the SSH equivalent is a local walk plus one SFTP walk, which for a
+    normal config tree is well under a second.
+
+    The interval adapts to what the check actually costs on this device, so a small tree
+    updates within a poll or two while a huge one backs off on its own rather than
+    spending the coordinator's time in a loop. 0 disables it entirely.
+    """
     if not config.SSH_DRIFT_SECONDS:
         return
     now = time.time()
-    if now - _last_drift_at.get(pc_ip, 0) < config.SSH_DRIFT_SECONDS:
+    # Never spend more than ~10% of elapsed time drift-checking one device.
+    interval = max(config.SSH_DRIFT_SECONDS, _drift_cost.get(pc_ip, 0) * 10)
+    if now - _last_drift_at.get(pc_ip, 0) < interval:
         return
     _last_drift_at[pc_ip] = now
     if not git_ops.ref_sha(config.TRAINING_LIVE):
         return
     if pc_ip not in manifest.load_manifest_at(config.TRAINING_LIVE).get("pcs", {}):
         return
+    started = time.time()
     try:
-        entries = drift(pc_ip).get("entries", [])
+        drift(pc_ip)          # records the clean flag itself
     except Exception:
         return
-    folder = manifest.pc_folder(pc_ip, config.TRAINING_LIVE) or manifest.pc_folder(pc_ip) or ""
-    db.upsert_agent(pc_ip, folder, "TRAINING", config.TRAINING_LIVE,
-                    not entries, kind="ssh")
+    finally:
+        _drift_cost[pc_ip] = time.time() - started
+        _last_drift_at[pc_ip] = time.time()
 
 
 def shutdown():

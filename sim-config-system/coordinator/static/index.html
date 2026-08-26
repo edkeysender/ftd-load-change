@@ -218,25 +218,24 @@
           <span id="dev-nextver" class="muted" style="font-weight:400;font-size:12px"></span></div>
 
         <div style="margin-bottom:14px">
-          <div style="font-size:13px;margin-bottom:5px"><b>Step 1.</b> Save the folder selection
+          <div style="font-size:13px;margin-bottom:5px"><b>Step 1.</b> Save the selection and import each PC's content
             <span id="step1-status" class="hint" style="margin:0"></span></div>
-          <button onclick="saveBrowserManifest()">Save to config</button>
-          <span id="browser-save-status" class="hint" style="margin:0"></span>
-        </div>
-
-        <div style="margin-bottom:14px">
-          <div style="font-size:13px;margin-bottom:5px"><b>Step 2.</b> Import each PC's content into the version
-            <span class="hint" style="margin:0">— pulls the selected folders from the live PC (agent must be online)</span></div>
-          <div id="dev-import-list"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <button id="save-import-btn" onclick="saveAndImport()">Save &amp; import</button>
+            <span id="browser-save-status" class="hint" style="margin:0"></span>
+          </div>
+          <div class="hint" style="margin-top:4px">Saves the folder selection, then pulls those folders from each PC in this load. Change the selection and run it again to re-import.</div>
+          <div id="dev-import-list" style="margin-top:10px"></div>
         </div>
 
         <div>
-          <div style="font-size:13px;margin-bottom:5px"><b>Step 3.</b> Create &amp; deploy the dev version to the sim</div>
+          <div style="font-size:13px;margin-bottom:5px"><b>Step 2.</b> Create &amp; deploy the dev version to the sim</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="warn" onclick="reviewChanges()">Review changes &amp; deploy…</button>
+            <button class="warn" onclick="deployAsDevLoad()">Deploy</button>
+            <button class="ghost" onclick="reviewChanges()">View changes</button>
             <span id="config-status" class="hint" style="margin:0"></span>
           </div>
-          <div class="hint" style="margin-top:4px">Shows the files you edited live on each PC vs the dev version you loaded. If it looks right, Deploy captures them into a new dev version and deploys it.</div>
+          <div class="hint" style="margin-top:4px">Deploy captures each PC's live edits into a new dev version and deploys it to the sim. View changes is optional — it shows what you edited live on each PC vs the version you loaded, first.</div>
         </div>
       </div>
     </div>
@@ -645,6 +644,7 @@ function fleetRow(p, a, guardCount) {
   const actions = ssh
     ? `<option value="sshtest">Test connection</option>
         <option value="sshkey">Re-install key</option>
+        <option value="sshreauth">Re-authenticate…</option>
         <option value="sshremove">Remove device</option>`
     : `<option value="update">Update agent</option>
         <option value="wake">Wake on LAN</option>
@@ -1049,25 +1049,35 @@ const wakePc = ip => act(() => api('POST', '/agents/' + encodeURIComponent(ip) +
 const shutdownPc = ip => confirm('Force shut down ' + ip + '? Running apps are killed and the PC powers off immediately. Its agent must be online to receive this.') && act(() => api('POST', '/agents/' + encodeURIComponent(ip) + '/shutdown', {}), 'Force shutdown sent to ' + ip);
 // --- add a Linux device (SSH enrollment) ---
 let sshBusy = false;
+let sshReauthIp = '';   // set => the modal is re-authenticating an existing device
 const INPUT_CSS = 'width:100%;padding:8px;border:1px solid #d3d1c7;border-radius:8px;box-sizing:border-box';
-function addSshDevice() {
+function addSshDevice(reauthIp) {
   sshBusy = false;
-  $('ssh-title').textContent = 'Add a Linux device';
+  sshReauthIp = reauthIp || '';
+  const d = sshReauthIp ? (SSH[sshReauthIp] || {}) : {};
+  $('ssh-title').textContent = sshReauthIp ? ('Re-authenticate ' + sshReauthIp) : 'Add a Linux device';
   const lbl = t => `<label style="display:block;font-size:13px;margin:10px 0 4px">${t}</label>`;
   $('ssh-body').innerHTML =
-    '<div class="hint" style="margin-bottom:6px">The coordinator connects over SSH with this password once, ' +
-    'installs its own key, and uses the key from then on. No agent is installed on the device.</div>' +
-    '<div style="display:flex;gap:8px">' +
-      `<div style="flex:2">${lbl('IP address')}<input id="ssh-ip" style="${INPUT_CSS}" placeholder="70.84.68.42"></div>` +
-      `<div style="flex:1">${lbl('Port')}<input id="ssh-port" style="${INPUT_CSS}" value="22"></div>` +
+    '<div class="hint" style="margin-bottom:6px">' +
+      (sshReauthIp
+        ? 'Replaces this device\'s login. Use it after the device was rebuilt (new host key), ' +
+          'if its password changed, or to switch to an account that can write the folders you sync.'
+        : 'The coordinator connects over SSH with this password once, installs its own key, ' +
+          'and uses the key from then on. No agent is installed on the device.') +
     '</div>' +
     '<div style="display:flex;gap:8px">' +
-      `<div style="flex:1">${lbl('User')}<input id="ssh-user" style="${INPUT_CSS}" value="root"></div>` +
+      `<div style="flex:2">${lbl('IP address')}<input id="ssh-ip" style="${INPUT_CSS}" placeholder="70.84.68.42" value="${esc(sshReauthIp)}"${sshReauthIp ? ' readonly' : ''}></div>` +
+      `<div style="flex:1">${lbl('Port')}<input id="ssh-port" style="${INPUT_CSS}" value="${esc(d.port || 22)}"></div>` +
+    '</div>' +
+    '<div style="display:flex;gap:8px">' +
+      `<div style="flex:1">${lbl('User')}<input id="ssh-user" style="${INPUT_CSS}" value="${esc(d.user || 'root')}"></div>` +
       `<div style="flex:1">${lbl('Password')}<input id="ssh-pass" type="password" style="${INPUT_CSS}"></div>` +
     '</div>' +
-    `${lbl('Name (optional)')}<input id="ssh-label" style="${INPUT_CSS}" placeholder="defaults to the OS name">` +
+    (sshReauthIp ? '' :
+      `${lbl('Name (optional)')}<input id="ssh-label" style="${INPUT_CSS}" placeholder="defaults to the OS name">`) +
     '<label style="display:block;font-size:12px;margin:12px 0 0;color:' + (CAN_STORE_SECRET ? '#2c2c2a' : '#908e86') + '">' +
-      '<input type="checkbox" id="ssh-remember"' + (CAN_STORE_SECRET ? '' : ' disabled') + '> ' +
+      '<input type="checkbox" id="ssh-remember"' + (CAN_STORE_SECRET ? '' : ' disabled') +
+      (sshReauthIp && d.password_stored ? ' checked' : '') + '> ' +
       'Remember the password (encrypted on the Pi)' +
     '</label>' +
     '<div class="hint" style="margin-top:2px">' +
@@ -1078,10 +1088,47 @@ function addSshDevice() {
     '<div id="ssh-result" style="margin-top:12px"></div>' +
     '<div class="row-actions" style="margin-top:14px">' +
       '<button class="ghost" onclick="doSshTest()">Test connection</button>' +
-      '<button onclick="doSshAdd()">Add device</button>' +
+      (sshReauthIp
+        ? '<button onclick="doSshReauth()">Re-authenticate</button>'
+        : '<button onclick="doSshAdd()">Add device</button>') +
     '</div>';
   $('ssh-modal').style.display = 'flex';
-  setTimeout(() => { const e = $('ssh-ip'); if (e) e.focus(); }, 40);
+  setTimeout(() => { const e = $(sshReauthIp ? 'ssh-pass' : 'ssh-ip'); if (e) e.focus(); }, 40);
+}
+async function doSshReauth() {
+  const f = sshForm();
+  if (!f.password) return sshSay('Enter the password for ' + esc(sshReauthIp) + '.', true);
+  if (!OPTOKEN && !askOpToken('Re-authenticating a device needs the operator token.')) return;
+  const body = { user: f.user, port: f.port, password: f.password, remember: f.remember,
+                 accept_host_key: false };
+  sshBusy = true; $('ssh-close').style.display = 'none'; sshSay('Re-authenticating…');
+  const url = '/ssh-devices/' + encodeURIComponent(sshReauthIp) + '/reauth';
+  try {
+    let r;
+    try {
+      r = await apiOp('POST', url, body);
+    } catch (e) {
+      // A rebuilt device has a different host key. Never accept that silently.
+      if (!/host key/i.test(e.message || '')) throw e;
+      sshBusy = false;
+      if (!confirm(e.message + '\n\nAccept the new host key and continue?')) throw e;
+      sshBusy = true;
+      body.accept_host_key = true;
+      r = await apiOp('POST', url, body);
+    }
+    sshSay('✓ re-authenticated as ' + esc(r.user) + '@' + esc(sshReauthIp) + ':' + r.port +
+           '\n' + esc(r.os_pretty || '') +
+           '\nkey ' + esc(r.key_installed) +
+           (r.host_key_changed ? '\nhost key updated' : '') +
+           '\npassword ' + (r.password_stored ? 'stored, encrypted' : 'not stored') +
+           (r.note ? '\n\n' + esc(r.note) : ''));
+    await refresh();
+    setTimeout(() => { sshBusy = false; $('ssh-close').style.display = ''; closeSsh(); },
+               r.note ? 4000 : 1600);
+  } catch (e) {
+    sshBusy = false; $('ssh-close').style.display = '';
+    sshSay('✗ ' + esc(e.message), true);
+  }
 }
 function closeSsh() { if (!sshBusy) $('ssh-modal').style.display = 'none'; }
 function sshForm() {
@@ -1090,7 +1137,7 @@ function sshForm() {
     port: parseInt($('ssh-port').value, 10) || 22,
     user: ($('ssh-user').value || 'root').trim(),
     password: $('ssh-pass').value,
-    label: ($('ssh-label').value || '').trim() || null,
+    label: (($('ssh-label') || {}).value || '').trim() || null,   // absent in re-auth mode
     remember: !!($('ssh-remember') || {}).checked,
   };
 }
@@ -1153,7 +1200,8 @@ const removeSsh = ip => confirm('Remove ' + ip + ' from the fleet?\n\nIts stored
 function pcAction(ip, sel) {
   const v = sel.value; sel.value = '';
   ({ update: updateAgent, wake: wakePc, shutdown: shutdownPc, remove: forgetPc,
-     sshtest: testSsh, sshkey: rekeySsh, sshremove: removeSsh }[v] || (() => {}))(ip);
+     sshtest: testSsh, sshkey: rekeySsh, sshremove: removeSsh,
+     sshreauth: addSshDevice }[v] || (() => {}))(ip);
 }
 async function driftPc(ip) {
   showDriftModal(ip, null);                       // loading state
@@ -1609,6 +1657,7 @@ const dlStatus = (m, c) => { const e = $('dl-status'); if (e) { e.innerHTML = m;
 function closeDevload() { if (!devloadBusy) $('devload-modal').style.display = 'none'; }
 function gotoDevLoad() { $('devload-modal').style.display = 'none'; showMainTab('loads'); const dv = $('devversions'); if (dv) dv.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
 async function deployAsDevLoad() {
+  if (importBusy) { toast('Still importing — wait for Step 1 to finish', true); return; }
   const author = who(); if (!author) { toast('Enter your name (top right) first', true); return; }
   const feedback = prompt('What does this dev load contain / what to test?'); if (!feedback) return;
   await saveBrowserManifest();  // flush selection + persist (stamps manifest_saved_at)
@@ -1664,72 +1713,144 @@ async function deployAsDevLoad() {
 
 // Render the "Create dev version" stepper: step-1 saved flag, per-PC import state,
 // and enable Deploy as Dev only when every PC in the load has fresh content on dev.
+// The PCs in the load you are building RIGHT NOW — from the in-browser selection, not
+// from the last-saved manifest. /dev/readiness can only describe what was saved, so
+// before you hit Save it still lists the previous load's PCs; driving the list from the
+// selection means picking one machine shows exactly that one machine.
+function selectionPcs() {
+  const out = [], seen = new Set();
+  for (const [ip, spec] of Object.entries((manifestObj && manifestObj.pcs) || {})) {
+    // The on-screen PC's picks live in selectedApps until flushSelection() folds them in.
+    const n = (ip === browsePc) ? selectedApps.size : Object.keys((spec && spec.apps) || {}).length;
+    if (n) { out.push({ ip, folder: (spec && spec.folder) || '' }); }
+    seen.add(ip);
+  }
+  if (browsePc && !seen.has(browsePc) && selectedApps.size) {
+    out.push({ ip: browsePc, folder: 'pc-' + browsePc.replace(/\./g, '-') });   // fresh NEW pick
+  }
+  return out;
+}
+const progBar = (pct, color) =>
+  `<div style="background:#ece9e0;border-radius:6px;height:7px;max-width:320px;overflow:hidden;margin-top:4px">` +
+  `<div style="background:${color};height:100%;width:${pct}%;transition:width .4s"></div></div>`;
+
 function renderDevStepper(r, prog) {
   if (!$('dev-import-list')) return;
   prog = prog || {};
   $('dev-nextver').textContent = nextDevTag ? '→ ' + nextDevTag : '';
   const saved = r && r.manifest_saved_at && !configDirty;
-  $('step1-status').textContent = configDirty ? '— unsaved changes, click Save' : (saved ? '✓ saved' : '— not saved yet');
-  $('step1-status').className = 'hint ' + (configDirty ? 'bad' : (saved ? 'ok' : ''));
-  const pcs = (r && r.pcs) || [];
+  $('step1-status').textContent = importBusy ? '— importing…'
+    : (configDirty ? '— unsaved changes, click Save & import' : (saved ? '✓ saved & imported' : '— not saved yet'));
+  $('step1-status').className = 'hint ' + (importBusy ? '' : (configDirty ? 'bad' : (saved ? 'ok' : '')));
+  const rmap = {}; ((r && r.pcs) || []).forEach(p => rmap[p.ip] = p);
+  const pcs = selectionPcs();
   const list = $('dev-import-list');
   if (!pcs.length) {
-    list.innerHTML = '<div class="muted" style="font-size:13px">Save the config first — then each PC in the load appears here to import.</div>';
-  } else {
-    list.innerHTML = pcs.map(p => {
-      const cp = prog[p.ip];
-      if (cp) importStarting.delete(p.ip);  // real progress arrived — no longer "starting"
-      let right;
-      if (cp && !cp.done && cp.committing) {
-        right = `<span class="muted" style="font-size:12px">committing to version… <span style="opacity:.7">(hashing + LFS push; can take a few min for large loads)</span></span>`;
-      } else if (cp && !cp.done) {
-        const pct = cp.total_bytes ? Math.min(100, Math.round(100 * cp.received_bytes / cp.total_bytes)) : 0;
-        right = `<span class="muted" style="font-size:12px">importing… ${fmtBytes(cp.received_bytes)} / ${fmtBytes(cp.total_bytes)} (${pct}%)</span>`;
-      } else if (importStarting.has(p.ip)) {
-        right = `<span class="muted" style="font-size:12px">starting… <span style="opacity:.7">(agent is scanning the folder)</span></span>`;
-      } else if (p.ready) {
-        right = `<span class="ok" style="font-size:12px">✓ imported ${ago(p.imported_at)}</span>`;
-      } else if (p.stale) {
-        right = `<span class="bad" style="font-size:12px">⚠ stale — re-import</span>`;
-      } else {
-        right = `<span class="bad" style="font-size:12px">✗ not imported</span>`;
-      }
-      const btn = `<button class="ghost" ${p.online ? '' : 'disabled'} onclick="devImport('${esc(p.ip)}')">Import</button>`;
-      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;flex-wrap:wrap">
-        <span style="min-width:230px"><b>${esc(p.ip)}</b> <span class="muted">${esc(p.folder||'')}</span></span>
-        <span class="dot ${p.online ? 'on' : 'off'}"></span>${p.online ? 'online' : 'offline'}
-        ${btn} ${right}</div>`;
-    }).join('');
+    list.innerHTML = '<div class="muted" style="font-size:13px">Pick a folder in the tree above — the PCs in this load then appear here.</div>';
+    return;
   }
+  list.innerHTML = pcs.map(sel => {
+    const p = rmap[sel.ip] || {};            // server-side readiness, once saved
+    const online = (LAST_AGENTS[sel.ip] || {}).online || p.online;
+    const cp = prog[sel.ip];
+    if (cp) importStarting.delete(sel.ip);   // real progress arrived — no longer "starting"
+    const err = importErrors[sel.ip] || (cp && cp.error);
+    let right = '', bar = '';
+    if (err) {
+      right = `<span class="bad" style="font-size:12px">✗ ${esc(err)}</span>`;
+    } else if (cp && !cp.done && cp.committing) {
+      right = `<span class="muted" style="font-size:12px">committing to version… <span style="opacity:.7">(hashing + LFS push; can take a few min for large loads)</span></span>`;
+      bar = progBar(100, '#1d7a59');
+    } else if (cp && !cp.done) {
+      const pct = cp.total_bytes ? Math.min(100, Math.round(100 * cp.received_bytes / cp.total_bytes)) : 0;
+      right = `<span class="muted" style="font-size:12px">importing ${fmtBytes(cp.received_bytes)} / ${fmtBytes(cp.total_bytes)} (${pct}%)</span>`;
+      bar = progBar(pct, '#99641a');
+    } else if (importStarting.has(sel.ip)) {
+      right = `<span class="muted" style="font-size:12px">starting… <span style="opacity:.7">(scanning the folder)</span></span>`;
+      bar = progBar(3, '#99641a');
+    } else if (p.ready) {
+      right = `<span class="ok" style="font-size:12px">✓ imported ${ago(p.imported_at)}</span>`;
+    } else if (p.stale) {
+      right = `<span class="bad" style="font-size:12px">⚠ stale — Save &amp; import again</span>`;
+    } else if (!online) {
+      right = `<span class="bad" style="font-size:12px">✗ offline — can't import</span>`;
+    } else {
+      right = `<span class="muted" style="font-size:12px">not imported yet</span>`;
+    }
+    return `<div style="padding:5px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="min-width:230px"><b>${esc(sel.ip)}</b> <span class="muted">${esc(sel.folder || p.folder || '')}</span></span>
+        <span class="dot ${online ? 'on' : 'off'}"></span>${online ? 'online' : 'offline'}
+        ${right}</div>${bar}</div>`;
+  }).join('');
 }
-function devImport(pc) {
-  apiOp('POST', '/import/' + encodeURIComponent(pc), {})
-    .then(() => {
-      importStarting.add(pc);                       // show "starting…" until upload begins
-      renderDevStepper(LAST_READY, LAST_PROG);      // reflect it immediately
-      toast('Importing ' + pc + ' — pulling its content into the version…');
-      pollDevImport(pc);
-    })
-    .catch(e => { importStarting.delete(pc); toast(e.message, true); });
+
+// Step 1: save the selection, then import every PC in it, reporting per-PC progress.
+// One button because the two are never useful apart — a saved selection with no import
+// can't be versioned, and importing without saving would pull the previous selection.
+let importBusy = false;
+let importErrors = {};
+async function saveAndImport() {
+  if (importBusy) return;
+  flushSelection();                                    // fold in the PC on screen
+  const pcs = {};
+  for (const [ip, spec] of Object.entries(manifestObj.pcs || {})) {
+    if (spec && Object.keys(spec.apps || {}).length) pcs[ip] = spec;
+  }
+  manifestObj.pcs = pcs;
+  const ips = Object.keys(pcs);
+  if (!ips.length) { setSaveStatus('pick at least one folder in the tree first', 'bad'); return; }
+  importBusy = true; importErrors = {};
+  const btn = $('save-import-btn'); if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+  try {
+    await api('PUT', '/manifest/json', manifestObj);
+    configDirty = false;
+    setSaveStatus('saved ✓ — ' + ips.length + ' PC(s) in this load', 'ok');
+  } catch (e) {
+    setSaveStatus('rejected: ' + e.message, 'bad');
+    importBusy = false; if (btn) { btn.disabled = false; btn.textContent = 'Save & import'; }
+    return;
+  }
+  for (const ip of ips) {
+    importStarting.add(ip);
+    try { await apiOp('POST', '/import/' + encodeURIComponent(ip), {}); }
+    catch (e) { importStarting.delete(ip); importErrors[ip] = e.message; }
+  }
+  renderDevStepper(LAST_READY, LAST_PROG);
+  await pollImports(ips);
+  importBusy = false;
+  if (btn) { btn.disabled = false; btn.textContent = 'Save & import'; }
+  const bad = Object.keys(importErrors).length;
+  setSaveStatus(bad ? (bad + ' PC(s) failed — see below') : 'imported ✓ — ready to deploy', bad ? 'bad' : 'ok');
+  refresh();
 }
-async function pollDevImport(pc) {
-  for (let i = 0; i < 1200; i++) {                 // ~30 min cap at 1.5s
+async function pollImports(ips) {
+  for (let i = 0; i < 1200; i++) {                     // ~30 min cap at 1.5s
     let boot, ready;
     try { boot = await api('GET', '/bootstrap'); } catch (e) { break; }
     try { ready = await api('GET', '/dev/readiness'); } catch (e) {}
     LAST_READY = ready || LAST_READY;
     LAST_PROG = (boot && boot.progress) || {};
-    const p = LAST_PROG[pc];
-    if (p) importStarting.delete(pc);              // upload has begun
+    ips.forEach(ip => { if (LAST_PROG[ip]) importStarting.delete(ip); });
     renderDevStepper(LAST_READY, LAST_PROG);
-    if (p && p.done) { importStarting.delete(pc); refresh(); break; }
-    // keep waiting while "starting…" (agent may scan a big folder first); give up ~2min in.
-    if (importStarting.has(pc)) { if (i > 80) { importStarting.delete(pc); renderDevStepper(LAST_READY, LAST_PROG); refresh(); break; } }
-    else if (!p && i > 6) { refresh(); break; }
+    const pending = ips.filter(ip => {
+      if (importErrors[ip]) return false;
+      const p = LAST_PROG[ip];
+      if (p && p.error) { importErrors[ip] = p.error; return false; }
+      if (p) return !p.done;
+      return importStarting.has(ip);                   // queued but not started yet
+    });
+    if (!pending.length) break;
+    // A PC that never starts (agent went away mid-run) shouldn't hang the whole step.
+    if (i > 80) ips.forEach(ip => {
+      if (!LAST_PROG[ip] && importStarting.has(ip)) {
+        importStarting.delete(ip);
+        importErrors[ip] = 'no response — is it online?';
+      }
+    });
     await new Promise(r => setTimeout(r, 1500));
   }
 }
-
 function showConfigTab(t) {
   $('tab-browser').style.display = t === 'browser' ? '' : 'none';
   $('tab-yaml').style.display = t === 'yaml' ? '' : 'none';
@@ -1804,6 +1925,7 @@ function browsePcChanged() {
   browsePc = $('browsePc').value;
   loadSelectedFromManifest();       // load picks for the PC we're entering
   reloadTree();
+  renderDevStepper(LAST_READY, LAST_PROG);   // Step 1's PC list follows the selection
 }
 
 // A simple folder exclude like "Navdata/**" (a relative path, no globs) maps back
@@ -1939,6 +2061,8 @@ function toggleSelect(entry, checked) {
   configDirty = true;  // selection changed -> must Save before deploying a dev version
   refreshTreeChecks();
   renderSelected();
+  // Reflect the pick in Step 1's PC list immediately instead of on the next 5s poll.
+  renderDevStepper(LAST_READY, LAST_PROG);
 }
 function refreshTreeChecks() {
   document.querySelectorAll('#tree input[type=checkbox]').forEach(cb => {
@@ -2050,7 +2174,12 @@ function flushSelection() {
     if (ex.length) spec.exclude = ex; else delete spec.exclude;
     apps[key] = spec;
   }
-  manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps });
+  const extra = {};
+  // Record how this PC is reached, so the manifest committed into a version is
+  // self-describing — deploying an old version must not have to guess, or consult a
+  // database that may since have changed.
+  if (SSH[browsePc]) extra.transport = 'ssh';
+  manifestObj.pcs[browsePc] = Object.assign({}, pc, { folder, apps }, extra);
 }
 async function saveBrowserManifest() {
   flushSelection();  // fold in the PC currently on screen
@@ -2065,7 +2194,7 @@ async function saveBrowserManifest() {
   try {
     await api('PUT', '/manifest/json', manifestObj);   // whole manifest = all PCs in this load
     configDirty = false;                               // saved — dev-version gate now uses server state
-    setSaveStatus('saved ✓ — ' + nPcs + ' PC(s) in this load — now import each PC', 'ok');
+    setSaveStatus('saved ✓ — ' + nPcs + ' PC(s) in this load', 'ok');
     refresh();
   } catch (e) { setSaveStatus('rejected: ' + e.message, 'bad'); }
 }
